@@ -1,9 +1,19 @@
 package client.GUI;
 
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.time.LocalDateTime;
+import java.util.UUID;
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
@@ -35,7 +45,64 @@ public class ComplaintPanel extends JPanel {
 
     /** 위 필드들을 배치하는 부분 — 디자인은 자유. */
     private void initLayout() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        setLayout(new BorderLayout(0, 12));
+        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 32));
+
+        JLabel title = new JLabel("민원 접수");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 20f));
+        add(title, BorderLayout.NORTH);
+
+        // 한 줄짜리 입력들은 위에 모으고, 내용(JTextArea)이 남는 공간을 전부 쓰게 한다.
+        JPanel head = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4);
+
+        c.gridx = 0;
+        c.gridy = 0;
+        c.anchor = GridBagConstraints.LINE_END;
+        head.add(new JLabel("제목"), c);
+        c.gridy = 1;
+        head.add(new JLabel("문의 분류"), c);
+
+        c.gridx = 1;
+        c.gridy = 0;
+        c.gridwidth = 3;
+        c.weightx = 1;
+        c.anchor = GridBagConstraints.LINE_START;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        head.add(titleField, c);
+
+        // 1차/2차 카테고리는 한 줄에 나란히
+        c.gridy = 1;
+        c.gridwidth = 1;
+        c.weightx = 0.5;
+        head.add(category1Field, c);
+        c.gridx = 2;
+        head.add(category2Field, c);
+
+        JLabel hint = new JLabel("※ 1차 · 2차 분류 순서로 입력 (예: 시설 / 냉난방)");
+        hint.setFont(hint.getFont().deriveFont(11f));
+        hint.setForeground(Color.GRAY);
+        c.gridx = 1;
+        c.gridy = 2;
+        c.gridwidth = 3;
+        c.fill = GridBagConstraints.NONE;
+        c.insets = new Insets(0, 4, 8, 4);
+        head.add(hint, c);
+
+        JPanel body = new JPanel(new BorderLayout(0, 6));
+        contentArea.setLineWrap(true);
+        contentArea.setWrapStyleWord(true);
+        body.add(head, BorderLayout.NORTH);
+        body.add(new JScrollPane(contentArea), BorderLayout.CENTER);
+
+        JPanel buttons = new JPanel();
+        buttons.add(submitButton);
+        buttons.add(myComplaintsButton);
+        buttons.add(backButton);
+        body.add(buttons, BorderLayout.SOUTH);
+
+        add(body, BorderLayout.CENTER);
     }
 
     private void submit() {
@@ -45,19 +112,31 @@ public class ComplaintPanel extends JPanel {
         Packet request = Packet.request(RequestType.POST_CREATE, new PostCreateOrUpdateRequest(BoardKey.COMPLAINT, post));
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
-            // TODO: 구현 필요. 예: JOptionPane.showMessageDialog(this, "접수되었습니다.");
+            JOptionPane.showMessageDialog(this,
+                    "접수되었습니다. 답변이 등록되면 '내 문의 내역'에서 확인할 수 있습니다.",
+                    "민원 접수 완료", JOptionPane.INFORMATION_MESSAGE);
+            clearFields(); // 다음 민원을 쓸 때 앞 내용이 남아있지 않도록
         } else {
             JOptionPane.showMessageDialog(this, response.getErrorMessage(), "제출 실패", JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    /** ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT, "home") 후 switchTo("postList"). */
-    private void openMyComplaints() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+    private void clearFields() {
+        titleField.setText("");
+        category1Field.setText("");
+        category2Field.setText("");
+        contentArea.setText("");
     }
 
-    /** 새 글의 id를 어떻게 채번할지 아직 팀 논의가 없었다(UUID vs 다른 규칙). */
+    /** ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT, "home") 후 switchTo("postList"). */
+    private void openMyComplaints() {
+        // 서버가 일반 유저에게는 본인이 넣은 민원만 돌려주므로 목록 화면을 그대로 재사용한다.
+        ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT, "home");
+        mainFrame.switchTo("postList");
+    }
+
+    /** 게시글 id 채번 규칙 — NoticePostEditorPanel과 동일하게 UUID를 쓴다(서버가 중복 id는 거부). */
     private String generateId() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        return UUID.randomUUID().toString();
     }
 }

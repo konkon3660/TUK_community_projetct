@@ -39,6 +39,7 @@
 | `REGISTER` | `model.User` | 없음 | |
 | `LOGOUT` | 없음 | 없음 | |
 | `USER_UPDATE` | `model.User`(수정 반영본) | 없음 | 관리자 전용 |
+| `USER_LOOKUP` | `String`(학번) | `model.User` | 관리자 전용 — 조회 전용이라 synchronized 안 함 |
 | `POST_LIST` | `String`(boardKey) | `List<model.boards.Post>` | 조회 전용 — synchronized 안 함 |
 | `POST_CREATE` | `PostCreateOrUpdateRequest` | `model.boards.Post`(저장 결과) | |
 | `POST_UPDATE` | `PostCreateOrUpdateRequest` | 없음 | |

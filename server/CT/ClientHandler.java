@@ -118,6 +118,8 @@ public class ClientHandler implements Runnable {
                 return handleLogout(request);
             case USER_UPDATE:
                 return handleUserUpdate(request);
+            case USER_LOOKUP:
+                return handleUserLookup(request);
             case POST_LIST:
                 return handlePostList(request);
             case POST_CREATE:
@@ -221,6 +223,13 @@ public class ClientHandler implements Runnable {
         stored.setPassword(updated.getPassword());
         dataStore.saveUsers();
         return Packet.success(request, null);
+    }
+
+    /** 회원정보 수정 화면에서 학번으로 회원 1명을 찾는 용도. User에는 비밀번호가 들어 있으므로 관리자 전용. */
+    private Packet handleUserLookup(Packet request) {
+        requireAdmin();
+        String userId = (String) request.getPayload();
+        return Packet.success(request, dataStore.getUser(userId)); // 없으면 NoSuchElementException
     }
 
     private Packet handlePostList(Packet request) {

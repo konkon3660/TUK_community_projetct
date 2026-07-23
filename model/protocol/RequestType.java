@@ -18,6 +18,9 @@ public enum RequestType {
     /** 요청 payload: {@code model.User}(수정 반영된 전체 정보), 관리자 전용. 응답 payload: 없음 */
     USER_UPDATE,
 
+    /** 요청 payload: {@code String}(학번), 관리자 전용. 응답 payload: {@code model.User}. 조회 전용 */
+    USER_LOOKUP,
+
     /** 요청 payload: {@code String}(boardKey). 응답 payload: {@code List<model.boards.Post>} */
     POST_LIST,
 
