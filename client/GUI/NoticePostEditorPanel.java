@@ -1,14 +1,11 @@
 package client.GUI;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import javax.swing.BorderFactory;
@@ -33,7 +30,8 @@ public class NoticePostEditorPanel extends JPanel {
     private final MainFrame mainFrame;
     private final JTextField titleField = new JTextField();
     private final JTextArea contentArea = new JTextArea();
-    private final JTextField targetDepartmentsField = new JTextField(); // 쉼표 구분, 비우면 전체 공지
+    // 단과대/학부 단위로 "모두"를 골라 그 밑 전체 학과에 한 번에 보낼 수 있다 (getTargetDepartments()).
+    private final DepartmentPickerPanel targetDepartmentPicker = new DepartmentPickerPanel(true);
     private final JCheckBox dormNoticeCheckBox = new JCheckBox("기숙사 공지");
     private final AttachmentPicker attachmentPicker;
     private final JButton saveButton = new JButton("저장");
@@ -82,23 +80,15 @@ public class NoticePostEditorPanel extends JPanel {
         f.anchor = GridBagConstraints.LINE_END;
         f.gridx = 0;
         f.gridy = 0;
-        foot.add(new JLabel("대상 학과"), f);
-
-        f.gridx = 1;
-        f.weightx = 1;
-        f.fill = GridBagConstraints.HORIZONTAL;
-        foot.add(targetDepartmentsField, f);
-
-        JLabel hint = new JLabel("※ 쉼표로 여러 학과 지정, 비워두면 전체 공지");
-        hint.setFont(hint.getFont().deriveFont(11f));
-        hint.setForeground(Color.GRAY);
-        f.gridy = 1;
+        f.gridwidth = 2;
+        f.weightx = 0;
         f.fill = GridBagConstraints.NONE;
         f.anchor = GridBagConstraints.LINE_START;
-        f.insets = new Insets(0, 4, 8, 4);
-        foot.add(hint, f);
+        foot.add(targetDepartmentPicker, f);
 
-        f.gridy = 2;
+        f.gridy = 1;
+        f.gridwidth = 1;
+        f.anchor = GridBagConstraints.LINE_END;
         f.insets = new Insets(0, 4, 4, 4);
         foot.add(dormNoticeCheckBox, f);
 
@@ -130,30 +120,28 @@ public class NoticePostEditorPanel extends JPanel {
             titleLabel.setText("공지 작성");
             titleField.setText("");
             contentArea.setText("");
-            targetDepartmentsField.setText("");
             dormNoticeCheckBox.setSelected(false);
             attachmentPicker.reset(null, null);
         } else {
             titleLabel.setText("공지 수정");
             titleField.setText(existingPost.getTitle());
             contentArea.setText(existingPost.getContent());
-            targetDepartmentsField.setText(String.join(",", existingPost.getTargetDepartments()));
             dormNoticeCheckBox.setSelected(existingPost.isDormNotice());
             attachmentPicker.reset(existingPost.getFilePath(), existingPost.getImagePath());
         }
         // 수정할 때는 대상 범위를 바꿀 수 없어서 아예 비활성화한다:
         // dormNotice는 NoticePost에서 final이고, 서버의 POST_UPDATE도 제목/내용/첨부만 반영한다.
-        // 대상 범위를 바꾸려면 공지를 지우고 다시 작성해야 한다.
-        targetDepartmentsField.setEnabled(existingPost == null);
+        // 대상 범위를 바꾸려면 공지를 지우고 다시 작성해야 한다. (기존 대상 학과를 픽커에
+        // 그대로 되비추지는 않는다 — 여러 학과일 수 있는데 픽커는 한 조합만 표시할 수 있고,
+        // 어차피 비활성화라 편집에 쓰이지도 않는다.)
+        targetDepartmentPicker.setEnabled(existingPost == null);
         dormNoticeCheckBox.setEnabled(existingPost == null);
     }
 
     private void save() {
         String authorId = mainFrame.getCurrentUser().getId();
         boolean isNew = editingPost == null;
-        List<String> targetDepartments = targetDepartmentsField.getText().isEmpty()
-                ? new ArrayList<>()
-                : new ArrayList<>(Arrays.asList(targetDepartmentsField.getText().split(",")));
+        List<String> targetDepartments = targetDepartmentPicker.getTargetDepartments();
         NoticePost post = isNew
                 ? new NoticePost(generateId(), titleField.getText(), authorId, contentArea.getText(),
                         attachmentPicker.getFilePath(), attachmentPicker.getImagePath(),

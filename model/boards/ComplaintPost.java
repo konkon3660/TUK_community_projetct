@@ -3,6 +3,7 @@ package model.boards;
 import java.time.LocalDateTime;
 
 import model.DataFormat;
+import model.User;
 
 public class ComplaintPost extends Post {
     private static final long serialVersionUID = 1L;
@@ -38,16 +39,36 @@ public class ComplaintPost extends Post {
         this.answered = true;
     }
 
+    /**
+     * 민원은 관리자여도 내용을 고칠 수 없다 — 관리자는 <b>답변(댓글)만</b> 가능해야 한다.
+     * canEdit는 이제 Post 기본 구현과 같지만(§Post.canEdit 참고), 다른 게시글과 달리
+     * canDelete까지 작성자 본인만 허용해야 하므로 둘 다 명시적으로 오버라이드한다.
+     * 서버(handlePostUpdate/removePost)와 GUI(수정·삭제 버튼 노출)가 모두 이 메서드를 보므로
+     * 여기 한 곳이면 된다.
+     */
+    @Override
+    public boolean canEdit(User requester) {
+        return requester.getId().equals(authorId);
+    }
+
+    /** 삭제도 같은 이유로 작성자 본인만. 관리자가 남의 민원을 지우면 문의 기록이 사라진다. */
+    @Override
+    public boolean canDelete(User requester) {
+        return requester.getId().equals(authorId);
+    }
+
     @Override
     public String toDataString() {
         return String.join(DataFormat.FIELD_DELIM,
-                baseDataString(), category1, category2, String.valueOf(answered));
+                baseDataString(), DataFormat.encode(category1), DataFormat.encode(category2),
+                String.valueOf(answered));
     }
 
     public static ComplaintPost fromDataString(String line) {
         String[] f = splitFields(line);
         ComplaintPost post = new ComplaintPost(f[0], f[1], f[2], f[3], emptyToNull(f[4]), emptyToNull(f[5]),
-                LocalDateTime.parse(f[6], DataFormat.DATETIME_FORMATTER), f[8], f[9]);
+                LocalDateTime.parse(f[6], DataFormat.DATETIME_FORMATTER),
+                DataFormat.decode(f[8]), DataFormat.decode(f[9]));
         post.getComments().addAll(parseComments(f[7]));
         if (Boolean.parseBoolean(f[10])) {
             post.markAnswered();

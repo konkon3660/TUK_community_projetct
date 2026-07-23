@@ -29,12 +29,13 @@ public class TimetableEntry {
     }
 
     public String toDataString() {
+        // 수업명은 사용자 입력이라 encode한다 — 이름에 '|'를 치면 파일이 깨진다 (Post와 같은 규칙).
         return String.join(DataFormat.FIELD_DELIM,
-                String.valueOf(dayOfWeek), String.valueOf(periodIndex), className);
+                String.valueOf(dayOfWeek), String.valueOf(periodIndex), DataFormat.encode(className));
     }
 
     public static TimetableEntry fromDataString(String line) {
         String[] f = line.split(Pattern.quote(DataFormat.FIELD_DELIM), -1);
-        return new TimetableEntry(Integer.parseInt(f[0]), Integer.parseInt(f[1]), f[2]);
+        return new TimetableEntry(Integer.parseInt(f[0]), Integer.parseInt(f[1]), DataFormat.decode(f[2]));
     }
 }

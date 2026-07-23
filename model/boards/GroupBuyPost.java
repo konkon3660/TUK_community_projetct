@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import model.ChatRoom;
@@ -46,23 +47,36 @@ public class GroupBuyPost extends Post {
         return hashtags;
     }
 
-    /** 현재 인원수는 항상 연결된 채팅방(chatRoomId)의 참여자 수와 동일해야 함 */
+    /** 연결된 채팅방을 못 받았을 때 돌려주는 값. "0명"과 "아직 모름"을 구분하기 위해 음수를 쓴다. */
+    public static final int UNKNOWN_MEMBER_COUNT = -1;
+
+    /**
+     * 현재 인원수는 항상 연결된 채팅방(chatRoomId)의 참여자 수와 동일해야 함.
+     * 별도 카운터를 두지 않고 방을 그대로 세는 이유는 두 값이 어긋날 여지를 없애기 위해서다.
+     * linkedRoom이 null이면(방 목록을 못 받았거나 chatRoomId가 비어있는 예전 글) UNKNOWN_MEMBER_COUNT.
+     */
     public int getCurrentMemberCount(ChatRoom linkedRoom) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        return linkedRoom == null ? UNKNOWN_MEMBER_COUNT : linkedRoom.getMemberIds().size();
     }
 
     @Override
     public String toDataString() {
-        String hashtagsEncoded = String.join(DataFormat.LIST_DELIM, hashtags);
+        // 해시태그는 쉼표로 이어붙이므로 태그 하나하나를 encode한다 (태그에 쉼표가 들어가도 안전하게).
+        String hashtagsEncoded = hashtags.stream()
+                .map(DataFormat::encode)
+                .collect(Collectors.joining(DataFormat.LIST_DELIM));
         return String.join(DataFormat.FIELD_DELIM,
-                baseDataString(), String.valueOf(maxMembers), chatRoomId, hashtagsEncoded);
+                baseDataString(), String.valueOf(maxMembers),
+                DataFormat.encode(chatRoomId), hashtagsEncoded);
     }
 
     public static GroupBuyPost fromDataString(String line) {
         String[] f = splitFields(line);
         List<String> hashtags = f[10].isEmpty()
                 ? new ArrayList<>()
-                : Arrays.stream(f[10].split(DataFormat.LIST_DELIM)).collect(Collectors.toList());
+                : Arrays.stream(f[10].split(Pattern.quote(DataFormat.LIST_DELIM)))
+                        .map(DataFormat::decode)
+                        .collect(Collectors.toList());
         GroupBuyPost post = new GroupBuyPost(f[0], f[1], f[2], f[3], emptyToNull(f[4]), emptyToNull(f[5]),
                 LocalDateTime.parse(f[6], DataFormat.DATETIME_FORMATTER),
                 Integer.parseInt(f[8]), f[9], hashtags);

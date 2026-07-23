@@ -15,7 +15,10 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 
 import model.ChatRoom;
 import model.protocol.ChatRoomJoinRequest;
@@ -32,6 +35,7 @@ public class ChatRoomListPanel extends JPanel {
     private final JButton backButton = new JButton("뒤로");
     private final JButton enterButton = new JButton("들어가기");
     private final JLabel headerLabel = new JLabel();
+    private final JTextField searchField = new JTextField();
     private final DefaultListModel<ChatRoom> listModel = new DefaultListModel<>();
     private final JList<ChatRoom> roomJList = new JList<>(listModel);
     private List<ChatRoom> rooms;
@@ -42,6 +46,15 @@ public class ChatRoomListPanel extends JPanel {
         refreshButton.addActionListener(e -> refresh());
         backButton.addActionListener(e -> mainFrame.switchTo("home"));
         enterButton.addActionListener(e -> openSelectedRoom());
+        // 타이핑하는 즉시 걸러지도록 — 별도 검색 버튼 없이 DocumentListener로 실시간 필터링.
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) { renderRooms(); }
+            @Override
+            public void removeUpdate(DocumentEvent e) { renderRooms(); }
+            @Override
+            public void changedUpdate(DocumentEvent e) { renderRooms(); }
+        });
         initLayout();
     }
 
@@ -51,8 +64,14 @@ public class ChatRoomListPanel extends JPanel {
         setLayout(new BorderLayout(0, 12));
         setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 32));
 
+        JPanel header = new JPanel(new BorderLayout(0, 6));
         headerLabel.setFont(headerLabel.getFont().deriveFont(Font.BOLD, 20f));
-        add(headerLabel, BorderLayout.NORTH);
+        header.add(headerLabel, BorderLayout.NORTH);
+        JPanel searchRow = new JPanel(new BorderLayout(6, 0));
+        searchRow.add(new JLabel("검색"), BorderLayout.WEST);
+        searchRow.add(searchField, BorderLayout.CENTER);
+        header.add(searchRow, BorderLayout.SOUTH);
+        add(header, BorderLayout.NORTH);
 
         roomJList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         roomJList.setCellRenderer(new ChatRoomRenderer());
@@ -82,7 +101,11 @@ public class ChatRoomListPanel extends JPanel {
                                                        boolean isSelected, boolean cellHasFocus) {
             ChatRoom room = (ChatRoom) value;
             StringBuilder line = new StringBuilder();
-            line.append('[').append(room.getRoomId()).append("]   방장 ").append(room.getOwnerId())
+            line.append('[').append(room.getRoomId()).append("] ");
+            if (!room.getName().isEmpty()) {
+                line.append(room.getName()).append("   ·   ");
+            }
+            line.append("방장 ").append(room.getOwnerId())
                     .append("   ·   인원 ").append(room.getMemberIds().size())
                     .append('/').append(room.getMaxMembers() == -1 ? "무제한" : room.getMaxMembers());
             if (room.getAdmissionYearLimit() != null) {
@@ -115,15 +138,34 @@ public class ChatRoomListPanel extends JPanel {
         }
     }
 
-    /** rooms를 화면에 그리고, 항목을 클릭하면
+    /** rooms를 검색어로 거른 뒤 화면에 그리고, 항목을 클릭하면
      *  ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open(room) 후 switchTo("chatRoom") — 렌더링은 자유. */
     private void renderRooms() {
-        headerLabel.setText("채팅방 (" + rooms.size() + ")");
-        listModel.clear();
-        for (ChatRoom room : rooms) {
-            listModel.addElement(room);
+        if (rooms == null) {
+            return; // refresh()로 아직 한 번도 받아오지 않은 상태
         }
+        String query = searchField.getText().trim().toLowerCase();
+        listModel.clear();
+        int shown = 0;
+        for (ChatRoom room : rooms) {
+            if (!matchesSearch(room, query)) {
+                continue;
+            }
+            listModel.addElement(room);
+            shown++;
+        }
+        headerLabel.setText("채팅방 (" + shown + "/" + rooms.size() + ")");
         roomJList.clearSelection();
+    }
+
+    /** 방 이름 · 방번호 · 방장 학번 중 하나라도 검색어를 포함하면 매치 (대소문자 무시). 빈 검색어는 전체 매치. */
+    private boolean matchesSearch(ChatRoom room, String query) {
+        if (query.isEmpty()) {
+            return true;
+        }
+        return room.getName().toLowerCase().contains(query)
+                || room.getRoomId().toLowerCase().contains(query)
+                || room.getOwnerId().toLowerCase().contains(query);
     }
 
     /** 선택한 방으로 들어간다. 아직 참여자가 아니면 먼저 가입 신청을 보낸다

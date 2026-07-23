@@ -30,6 +30,48 @@ DB 없이 `.dat` 파일로 저장합니다. **한 줄 = 객체 하나.** 파일 
 모든 엔티티는 `toDataString()` / `static fromDataString(String)` 한 쌍을 제공합니다.
 `split`은 항상 `-1` 리밋으로 호출해서 **뒤쪽 빈 칸이 잘리지 않게** 합니다.
 
+### 1-1. 이스케이프 — `DataFormat.encode()` / `decode()`
+
+사용자가 제목에 `|`를 치거나 본문에서 Enter를 누르면 위 포맷이 그대로 깨집니다.
+그래서 **사용자가 입력한 값은 저장할 때 `encode()`, 복원할 때 `decode()`를 반드시 거칩니다.**
+
+| 실제 값 | 저장된 모습 |
+|---|---|
+| `\|` | `\p` |
+| `^` | `\c` |
+| `;` | `\s` |
+| `,` | `\l` |
+| `:` | `\m` |
+| 줄바꿈 | `\n` |
+| `\` | `\\` |
+
+> **규칙은 하나뿐입니다 — 말단 값에만 씌운다.**
+> 저장 포맷은 중첩 구조(게시글 안에 댓글, 채팅방 안에 채팅)라서, 구조를 만드는 `join`이 넣는
+> 구분자까지 치환하면 구조 자체가 사라집니다. 반대로 말단에 구분자가 남아있지 않기만 하면
+> **모든 단계의 `split`이 자동으로 안전해집니다.**
+>
+> 그래서 `Post.splitFields()`는 공통 필드 0~5번만 decode하고, **7번(댓글 목록)과 리스트 필드는
+> 일부러 그대로 둡니다.** 그 안의 값들은 각자 인코딩되어 있어서, 여기서 미리 풀면
+> `Comment.fromDataString`이 `^`로 쪼갤 때 구분자가 되살아나 깨집니다.
+
+새 필드를 추가할 때:
+
+- 사용자가 입력하는 문자열 → `DataFormat.encode(값)` / `DataFormat.decode(f[n])`
+- 리스트 필드 → **원소 하나하나를** encode한 뒤 `LIST_DELIM`으로 이어붙임
+- Map 필드 → **키와 값 모두** encode
+- 숫자·boolean·작성시각 → 그대로 둠 (기계가 만든 값이라 구분자가 들어갈 일이 없고,
+  파일을 눈으로 읽을 수 있게 남겨둠)
+
+`decode()`는 역슬래시가 없는 문자열을 그대로 돌려주므로, **이스케이프 도입 전에 손으로 쓴
+기존 `.dat` 파일도 변환 없이 그대로 읽힙니다.**
+
+⚠️ `decode()`를 `replace` 체인으로 구현하면 안 됩니다. 사용자가 실제로 입력한 역슬래시
+(저장된 모습은 `\\p`)를 `|`로 잘못 복원합니다. 반드시 왼쪽부터 한 번만 훑어야 합니다.
+
+> 추천 데이터(`client/recommend_data/*`)는 앱이 **읽기만 하고 쓰지 않는** 손으로 만든 파일이라
+> 이스케이프를 적용하지 않았습니다. 나중에 이 파일들을 앱에서 저장하는 기능이 생기면
+> 그때 같은 규칙을 적용해야 합니다.
+
 ---
 
 ## 2. 회원 — `model/User.java`
@@ -83,8 +125,8 @@ DB 없이 `.dat` 파일로 저장합니다. **한 줄 = 객체 하나.** 파일 
 
 | 메서드 | 하는 일 |
 |---|---|
-| `canEdit(User)` | 관리자이거나 본인 글이면 `true` |
-| `canDelete(User)` | 위와 같은 조건 |
+| `canEdit(User)` | **본인 글일 때만** `true`. 관리자라도 남의 글은 수정 못 한다 (2026-07-23 기획 변경, [02_requirements.md §2.2](02_requirements.md)) |
+| `canDelete(User)` | 관리자이거나 본인 글이면 `true`. **`ComplaintPost`는 이걸 오버라이드해서 관리자도 못 지우게 한다** (§3.3) |
 | `addComment(Comment)` | 댓글 추가 |
 | `removeComment(Comment, User)` | `canDelete` 확인 후 삭제. 권한 없으면 예외 |
 | `toDataString()` | 파일에 저장할 한 줄 문자열로 변환 |
@@ -152,6 +194,20 @@ public static XxxPost fromDataString(String line) {
   1. 관리자면 무조건 `true`
   2. 기숙사 공지인데 기숙사생이 아니면 `false`
   3. 대상 학과가 비어 있으면 `true`, 아니면 그 목록에 유저 학과가 있어야 `true`
+
+**`ComplaintPost`**
+
+| 필드 | 타입 | 비고 |
+|---|---|---|
+| `category1` | String | 문의 1차 카테고리 |
+| `category2` | String | 문의 2차 카테고리 |
+| `answered` | boolean | 답변 여부. `markAnswered()`로 켠다 |
+
+- **`canEdit(User)` / `canDelete(User)`를 오버라이드해서 관리자 예외를 없앱니다** — 둘 다
+  **작성자 본인일 때만** `true`입니다. 관리자가 민원에 할 수 있는 것은 댓글로 답변하는 것뿐이고,
+  민원은 사용자↔관리자 1:1 기록이라 접수 원문이 그대로 남아야 합니다
+  ([02_requirements.md §3.5](02_requirements.md)).
+- 관리자가 민원에 댓글을 달면 서버가 `markAnswered()`를 불러 답변 완료로 바꿉니다.
 
 **`ComplaintPost`**
 
@@ -245,11 +301,11 @@ boardKey로 씁니다 (학과명은 코드가 아니라 데이터이므로).
 | `getAllChatRooms()` | 복사본 리스트 반환 |
 | `saveChatRoom(ChatRoom)` | 그 방의 파일 하나만 덮어쓰기 |
 
-> **새 학과가 생기면** `DataStore.registerBoards()`에 한 줄만 추가하면 됩니다:
-> ```java
-> boards.put("전기공학과", new DepartmentBoard("전기공학과",
->         "server/data/boards/class_boards/electrical.dat"));
-> ```
+> **학과 게시판은 손으로 등록하지 않습니다(2026-07-23부터).** `registerBoards()`가
+> `AcademicStructure.COLLEGES`를 순회하며 리프(학과/전공) 전체를 자동으로 등록합니다 — 파일
+> 경로는 `server/data/boards/class_boards/<학과명>.dat`로 통일되어 있어 이름만 보고 유추할
+> 수 있습니다. **새 학과가 생기면 `AcademicStructure.COLLEGES`에 한 줄만 추가하면 됩니다**
+> (`DataStore`는 건드릴 필요 없음). §7을 보세요.
 
 ---
 
@@ -283,6 +339,7 @@ boardKey로 씁니다 (학과명은 코드가 아니라 데이터이므로).
 | 8 | `chats` | List\<Chat\> | 채팅 기록 |
 | 9 | `pendingJoinRequests` | Map\<String, String\> | userId → 가입지원 메세지 (`LinkedHashMap` = 신청 순서 유지) |
 | 10 | `nicknames` | Map\<String, String\> | userId → 이 방에서의 프로필 이름 |
+| 11 | `name` | String | 검색용 방 이름(2026-07-23 추가). 비어 있어도 됨. 공동구매 글에 딸린 방은 글 제목이 자동으로 들어감 |
 
 가입 절차와 규칙:
 
@@ -325,3 +382,42 @@ boardKey로 씁니다 (학과명은 코드가 아니라 데이터이므로).
 | `ClassPeriod` | 교시 번호, 시작 시각, 지속 분 |
 | `MenuOption` | `restaurant`, `menuName` |
 | `BookRecommendation` | `department`, `title`, `description` |
+
+---
+
+## 7. 학과 조직도 — `model/AcademicStructure.java` (2026-07-23 추가)
+
+`User.department`(회원가입/회원정보수정)와 `NoticePost.targetDepartments`(공지 대상학과)에
+들어가는 학과 이름은 이제 **자유 텍스트가 아니라 이 클래스가 정의한 트리에서만** 고를 수
+있습니다. 화면 3곳(`RegisterPanel`, `UserEditPanel`, `NoticePostEditorPanel`)이 전부
+`client/GUI/DepartmentPickerPanel`(단과대→학부→학과 3단 연동 `JComboBox`)을 재사용합니다.
+
+- **단과대(`College`) → 학부(`Division`) → 학과(`Department`)** 3단 고정 트리.
+  `AcademicStructure.COLLEGES`가 단일 출처입니다.
+- 세부 전공 없이 그 자체가 학과인 학부(예: 자유전공학부)나, 단과대 밑에 학부 없이 바로
+  달린 학과(예: AI융합대학의 게임공학과)도 **"학부 이름 = 학과 이름"인 리프 하나짜리
+  `Division`** 으로 표현해서 화면의 3단 드롭다운이 항상 같은 구조로 동작합니다
+  (`Division.leaf(name)`).
+- 자유전공학부·경영학부·디자인공학부는 소속 단과대가 없어서 `AcademicStructure.NO_COLLEGE`
+  ("단과대 미지정")라는 가짜 단과대 아래에 묶여 있습니다.
+- `AcademicStructure.locate(departmentName)`으로 리프 이름 → 소속 단과대/학부를 역으로
+  찾을 수 있습니다 (`UserEditPanel`이 기존 유저의 학과로 드롭다운을 미리 채울 때 씀).
+
+`DepartmentPickerPanel`은 두 가지 모드로 재사용됩니다:
+
+| 모드 | 쓰는 화면 | 반환 메서드 |
+|---|---|---|
+| `includeAllOption=false` | `RegisterPanel`, `UserEditPanel` | `getSelectedDepartmentName()` — 항상 학과 하나 |
+| `includeAllOption=true` | `NoticePostEditorPanel` | `getTargetDepartments()` — 각 단계 "모두" 선택에 따라 리프 학과 이름 목록 반환. 단과대에서 "모두"를 고르면 빈 리스트(=전체 공지, 기존 규칙과 동일) |
+
+> ✅ **시연 데이터 개편 완료(2026-07-23)**: 트리에 없던 "컴퓨터공학과"·"물리학과"는
+> `server/data/users.dat`·`server/data/boards/notice_board.dat`(n002 공지의 대상 학과)에서
+> 각각 "컴퓨터공학전공"(AI융합대학>컴퓨터공학부)·"전기공학전공"(첨단융합대학>에너지·전기공학부)
+> 으로 바꿔서 트리와 일치시켰습니다. 게시판 파일도 트리의 리프 이름과 똑같이
+> `class_boards/컴퓨터공학전공.dat`·`class_boards/전기공학전공.dat`(옛 `physics.dat` — 내용은
+> 그대로 두고 이름만 바꿨습니다. "일반물리 실험"·"전자기학 재수강"은 전기공학 전공생에게도
+> 자연스러운 내용입니다)로 이름을 맞췄습니다.
+>
+> **`DataStore.registerBoards()`가 `AcademicStructure.COLLEGES`를 순회해서 40개 학과 게시판을
+> 전부 자동 등록**하므로, 위 3곳(AI소프트웨어학과·컴퓨터공학전공·전기공학전공)만 시연용
+> 게시글이 채워져 있고 나머지 37개는 등록은 됐지만 빈 게시판입니다.

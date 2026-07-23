@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import model.DataFormat;
@@ -46,7 +47,10 @@ public class NoticePost extends Post {
 
     @Override
     public String toDataString() {
-        String deptsEncoded = String.join(DataFormat.LIST_DELIM, targetDepartments);
+        // 학과명은 쉼표로 이어붙이므로 하나하나 encode한다.
+        String deptsEncoded = targetDepartments.stream()
+                .map(DataFormat::encode)
+                .collect(Collectors.joining(DataFormat.LIST_DELIM));
         return String.join(DataFormat.FIELD_DELIM,
                 baseDataString(), deptsEncoded, String.valueOf(dormNotice));
     }
@@ -55,7 +59,9 @@ public class NoticePost extends Post {
         String[] f = splitFields(line);
         List<String> depts = f[8].isEmpty()
                 ? new ArrayList<>()
-                : Arrays.stream(f[8].split(DataFormat.LIST_DELIM)).collect(Collectors.toList());
+                : Arrays.stream(f[8].split(Pattern.quote(DataFormat.LIST_DELIM)))
+                        .map(DataFormat::decode)
+                        .collect(Collectors.toList());
         NoticePost post = new NoticePost(f[0], f[1], f[2], f[3], emptyToNull(f[4]), emptyToNull(f[5]),
                 LocalDateTime.parse(f[6], DataFormat.DATETIME_FORMATTER),
                 depts, Boolean.parseBoolean(f[9]));

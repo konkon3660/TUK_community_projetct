@@ -68,6 +68,10 @@ public enum RequestType {
     /** 요청 payload: {@link model.protocol.ChatSendRequest}. 응답 payload: 없음(전송 성공 여부만) */
     CHAT_SEND,
 
+    /** 이 방에서 쓸 프로필 이름(닉네임)을 설정한다 (참여자 전용).
+     *  요청 payload: {@link model.protocol.ChatRoomNicknameRequest}. 응답 payload: 없음 */
+    CHATROOM_SET_NICKNAME,
+
     /** 요청 payload: 없음. 응답 payload: {@code List<model.ChatRoom>}(전체 채팅방 목록) */
     CHATROOM_LIST,
 

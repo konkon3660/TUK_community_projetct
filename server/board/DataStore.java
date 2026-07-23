@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 
+import model.AcademicStructure;
 import model.ChatRoom;
 import model.FileStorage;
 import model.User;
@@ -28,7 +29,8 @@ import model.protocol.BoardKey;
 /**
  * 서버 시작 시 한 번 생성되어 게시판/유저/채팅방을 메모리에 올려두는 레지스트리.
  * 파일 입출력 배관만 담당하고 권한 체크 등 업무 로직은 넣지 않는다 — model/의 기존
- * 메서드를 그대로 사용한다. 새 학과가 생기면 registerBoards()에 한 줄만 추가하면 된다.
+ * 메서드를 그대로 사용한다. 학과별 게시판은 {@link AcademicStructure}를 순회해서 자동으로
+ * 등록되므로, 새 학과가 생겨도 이 클래스는 손댈 필요가 없다 — 조직도에만 추가하면 된다.
  */
 public class DataStore {
     private static final Path USERS_PATH = Path.of("server/data/users.dat");
@@ -43,6 +45,8 @@ public class DataStore {
         loadAll();
     }
 
+    private static final String CLASS_BOARDS_DIR = "server/data/boards/class_boards/";
+
     private void registerBoards() {
         boards.put(BoardKey.FREE, new FreeBoard());
         boards.put(BoardKey.GROUP_BUY, new GroupBuyBoard());
@@ -50,13 +54,19 @@ public class DataStore {
         boards.put(BoardKey.NOTICE, new NoticeBoard());
         boards.put(BoardKey.COMPLAINT, new ComplaintBoard());
 
-        // 학과별 게시판: boardKey == 학과명. 새 학과가 생기면 여기에 한 줄 추가.
-        boards.put("AI소프트웨어학과",
-                new DepartmentBoard("AI소프트웨어학과", "server/data/boards/class_boards/AI_software_board.dat"));
-        boards.put("컴퓨터공학과",
-                new DepartmentBoard("컴퓨터공학과", "server/data/boards/class_boards/computer_science.dat"));
-        boards.put("물리학과",
-                new DepartmentBoard("물리학과", "server/data/boards/class_boards/physics.dat"));
+        // 학과별 게시판: boardKey == 학과명. AcademicStructure의 리프(단과대→학부→학과) 전체를
+        // 순회해서 한 번에 등록한다 — 학과가 40개가 넘어 손으로 나열하면 실수하기 쉽고, 트리에
+        // 새 학과가 추가돼도 여기 코드를 바꿀 필요 없이 게시판이 자동으로 생긴다.
+        // 파일이 없는 학과(아직 아무도 글을 안 쓴 곳)는 AbstractBoard.load()가 빈 목록으로
+        // 시작하고, 첫 글이 저장될 때 save()가 파일을 새로 만든다.
+        for (AcademicStructure.College college : AcademicStructure.COLLEGES) {
+            for (AcademicStructure.Division division : college.getDivisions()) {
+                for (AcademicStructure.Department department : division.getDepartments()) {
+                    String name = department.getName();
+                    boards.put(name, new DepartmentBoard(name, CLASS_BOARDS_DIR + name + ".dat"));
+                }
+            }
+        }
     }
 
     private void loadAll() {

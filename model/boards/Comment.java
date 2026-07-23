@@ -36,14 +36,18 @@ public class Comment implements Serializable {
         return requester.isAdmin() || requester.getId().equals(authorId);
     }
 
-    /** 댓글 하나를 SUBOBJECT_DELIM으로 인코딩 (게시글/채팅방의 댓글 목록 직렬화에 사용) */
+    /** 댓글 하나를 SUBOBJECT_DELIM으로 인코딩 (게시글/채팅방의 댓글 목록 직렬화에 사용).
+     *  댓글 내용은 '^'와 ';' 두 겹 안쪽에 있어서 인코딩이 특히 중요하다 — 여기서 encode를
+     *  빼먹으면 댓글에 세미콜론 하나만 써도 게시글 전체를 못 읽게 된다. */
     public String toDataString() {
         return String.join(DataFormat.SUBOBJECT_DELIM,
-                authorId, content, createdAt.format(DataFormat.DATETIME_FORMATTER));
+                DataFormat.encode(authorId), DataFormat.encode(content),
+                createdAt.format(DataFormat.DATETIME_FORMATTER));
     }
 
     public static Comment fromDataString(String data) {
         String[] f = data.split(Pattern.quote(DataFormat.SUBOBJECT_DELIM), -1);
-        return new Comment(f[0], f[1], LocalDateTime.parse(f[2], DataFormat.DATETIME_FORMATTER));
+        return new Comment(DataFormat.decode(f[0]), DataFormat.decode(f[1]),
+                LocalDateTime.parse(f[2], DataFormat.DATETIME_FORMATTER));
     }
 }

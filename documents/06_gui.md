@@ -81,6 +81,24 @@ mainFrame.switchTo("postDetail");
 `open(...)`이 서버 조회까지 하는 경우도 있습니다 (`PostListPanel.open`은 `POST_LIST`를
 보내고 결과를 렌더링합니다).
 
+### 목록으로 돌아갈 때는 `PostListPanel.refresh()`
+
+`PostListPanel`은 받아온 게시글 목록을 **자기 안에 사본으로** 들고 있습니다. 상세나 에디터에서
+글을 저장·삭제하고 `switchTo("postList")`만 하면 **방금 지운 글이 그대로 보입니다.**
+그래서 목록으로 되돌아가기 직전에 인자 없는 `refresh()`를 부릅니다:
+
+```java
+((PostListPanel) mainFrame.getScreen("postList")).refresh();
+mainFrame.switchTo("postList");
+```
+
+`refresh()`는 마지막으로 연 `boardKey`를 그대로 다시 조회합니다. `PostDetailPanel` /
+`PostEditorPanel` / `GroupBuyPostEditorPanel`은 `backTarget`("home"인지 "admin"인지)을
+모르기 때문에 `open(boardKey, backTarget)`을 대신 부를 수 없어서 이 메서드가 필요합니다.
+(`NoticePostEditorPanel`만은 관리자 전용이라 `open(BoardKey.NOTICE, "admin")`을 직접 부릅니다.)
+
+취소 버튼처럼 **아무것도 바꾸지 않고** 돌아갈 때는 `switchTo`만 하면 됩니다.
+
 ---
 
 ## 4. 화면 15개
@@ -133,6 +151,13 @@ if (response.getStatus() == ResponseStatus.OK) {
    그동안 화면이 멈춥니다 — 현재 규모에서는 그대로 두기로 했습니다.
 3. **권한 검사는 서버가 합니다.** GUI에서 버튼을 숨기는 건 편의일 뿐입니다.
    비기숙사생이 기숙사 게시판을 눌러도 서버가 거부하고 그 사유가 팝업으로 표시됩니다.
+   그러므로 **권한 규칙이 바뀌면 화면이 아니라 `model/`의 `canXxx()`를 고쳐야** 합니다.
+   `PostDetailPanel`은 `post.canEdit(me)` / `post.canDelete(me)` 결과를 그대로 따르므로,
+   모델만 고치면 버튼은 저절로 맞게 나옵니다. 화면에서 `isAdmin()`을 직접 보고 분기하지 마세요.
+
+> 📌 **2026-07-23 기획 변경**: 관리자는 **남의 글을 수정할 수 없습니다**(삭제만 가능).
+> 민원 글은 **관리자가 삭제도 할 수 없고 답변(댓글)만** 할 수 있습니다.
+> 상세 규칙은 [02_requirements.md §2.2](02_requirements.md)의 표를 보세요.
 
 ---
 

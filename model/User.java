@@ -53,13 +53,16 @@ public class User implements Serializable {
         this.password = password;
     }
 
+    /** 학번/학과/비밀번호는 사용자가 입력한 값이라 encode한다 (특히 비밀번호에 '|'가 들어갈 수 있다). */
     public String toDataString() {
         return String.join(DataFormat.FIELD_DELIM,
-                id, department, String.valueOf(dormitory), password, String.valueOf(admin));
+                DataFormat.encode(id), DataFormat.encode(department), String.valueOf(dormitory),
+                DataFormat.encode(password), String.valueOf(admin));
     }
 
     public static User fromDataString(String line) {
         String[] f = line.split(Pattern.quote(DataFormat.FIELD_DELIM), -1);
-        return new User(f[0], f[1], Boolean.parseBoolean(f[2]), f[3], Boolean.parseBoolean(f[4]));
+        return new User(DataFormat.decode(f[0]), DataFormat.decode(f[1]), Boolean.parseBoolean(f[2]),
+                DataFormat.decode(f[3]), Boolean.parseBoolean(f[4]));
     }
 }

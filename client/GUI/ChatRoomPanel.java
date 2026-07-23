@@ -26,6 +26,7 @@ import model.Chat;
 import model.ChatRoom;
 import model.protocol.ChatPushPayload;
 import model.protocol.ChatRoomJoinDecision;
+import model.protocol.ChatRoomNicknameRequest;
 import model.protocol.ChatSendRequest;
 import model.protocol.Packet;
 import model.protocol.RequestType;
@@ -41,6 +42,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
     private final JButton sendButton = new JButton("보내기");
     private final JButton backButton = new JButton("뒤로");
     private final JButton refreshButton = new JButton("새로고침");
+    private final JButton nicknameButton = new JButton("닉네임 설정");
     private final JLabel headerLabel = new JLabel();
     private final JTextArea chatArea = new JTextArea();
     private final JPanel pendingPanel = new JPanel(new BorderLayout(0, 6));
@@ -55,6 +57,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         sendButton.addActionListener(e -> sendMessage());
         backButton.addActionListener(e -> mainFrame.switchTo("chatRoomList"));
         refreshButton.addActionListener(e -> refresh());
+        nicknameButton.addActionListener(e -> promptNickname());
         approveButton.addActionListener(e -> approveSelectedJoin());
         rejectButton.addActionListener(e -> rejectSelectedJoin());
         // 입력칸에서 엔터를 쳐도 전송되게 한다.
@@ -95,6 +98,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         JPanel bottom = new JPanel(new BorderLayout(6, 0));
         JPanel bottomButtons = new JPanel();
         bottomButtons.add(sendButton);
+        bottomButtons.add(nicknameButton);
         bottomButtons.add(refreshButton);
         bottomButtons.add(backButton);
         bottom.add(messageField, BorderLayout.CENTER);
@@ -120,6 +124,12 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         this.room = room;
         mainFrame.getConnection().setPushListener(this);
         renderMessages();
+        // 이 방에서 아직 닉네임을 정한 적이 없으면 입장할 때 한 번 물어본다.
+        // 취소하거나 빈 값을 넣으면 학번이 그대로 쓰이고, 다음에 들어올 때 다시 묻는다.
+        String nickname = room.getNickname(myId());
+        if (nickname == null || nickname.isEmpty()) {
+            promptNickname();
+        }
     }
 
     /**
@@ -164,6 +174,29 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         // 시각은 서버가 찍은 것과 몇 ms 다를 수 있지만, 다시 들어오면 서버 값으로 맞춰진다.
         room.sendChat(new Chat(myId(), LocalDateTime.now(), content));
         messageField.setText("");
+        renderMessages();
+    }
+
+    /** 이 방에서 쓸 프로필 이름을 물어보고 서버에 반영한다. 취소/빈 값이면 아무 것도 하지 않는다. */
+    private void promptNickname() {
+        String current = room.getNickname(myId());
+        String nickname = JOptionPane.showInputDialog(this,
+                "이 채팅방에서 사용할 닉네임을 입력하세요.", current == null ? "" : current);
+        if (nickname == null) { // 취소 — 학번 그대로 유지
+            return;
+        }
+        nickname = nickname.trim();
+        if (nickname.isEmpty()) {
+            return;
+        }
+        Packet request = Packet.request(RequestType.CHATROOM_SET_NICKNAME,
+                new ChatRoomNicknameRequest(room.getRoomId(), nickname));
+        Packet response = mainFrame.getConnection().sendRequest(request);
+        if (response.getStatus() != ResponseStatus.OK) {
+            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "닉네임 설정 실패", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        room.setNickname(myId(), nickname); // 서버가 한 것과 같은 처리를 들고 있는 사본에도 반영
         renderMessages();
     }
 
@@ -221,7 +254,9 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         if (room == null) {
             return;
         }
-        headerLabel.setText("채팅방 " + room.getRoomId()
+        String roomTitle = room.getName().isEmpty() ? "채팅방 " + room.getRoomId()
+                : room.getName() + " [" + room.getRoomId() + "]";
+        headerLabel.setText(roomTitle
                 + "   ·   인원 " + room.getMemberIds().size()
                 + "/" + (room.getMaxMembers() == -1 ? "무제한" : room.getMaxMembers())
                 + (isOwner() ? "   ·   내가 방장" : ""));

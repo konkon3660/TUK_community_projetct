@@ -24,12 +24,14 @@ public class UserEditPanel extends JPanel {
     private final MainFrame mainFrame;
     private final JTextField searchIdField = new JTextField();
     private final JButton searchButton = new JButton("조회");
-    private final JTextField departmentField = new JTextField();
+    // 학과는 자유 텍스트가 아니라 단과대→학부→학과 3단 드롭다운으로 고른다 (RegisterPanel과 동일).
+    private final DepartmentPickerPanel departmentPicker = new DepartmentPickerPanel(false);
     private final JCheckBox dormitoryCheckBox = new JCheckBox("기숙사생");
     private final JPasswordField passwordField = new JPasswordField();
     private final JButton saveButton = new JButton("저장");
     private final JButton backButton = new JButton("관리자 홈");
     private final JLabel resultLabel = new JLabel(" ");
+    private final JLabel legacyDepartmentWarning = new JLabel(" ");
     private User editingUser;
 
     public UserEditPanel(MainFrame mainFrame) {
@@ -83,27 +85,38 @@ public class UserEditPanel extends JPanel {
         c.insets = new Insets(0, 6, 10, 6);
         form.add(resultLabel, c);
 
+        // 학과 픽커는 라벨 3개(단과대/학부/학과)를 자체적으로 그리므로 한 줄 전체를 차지한다.
+        c.gridx = 0;
+        c.gridy = 3;
+        c.gridwidth = 3;
+        c.fill = GridBagConstraints.NONE;
+        c.anchor = GridBagConstraints.LINE_START;
+        c.insets = new Insets(6, 6, 0, 6);
+        form.add(departmentPicker, c);
+
+        // 트리에 없는 값(과거 자유 입력 데이터)을 조회했을 때만 보이는 경고.
+        legacyDepartmentWarning.setFont(legacyDepartmentWarning.getFont().deriveFont(11f));
+        legacyDepartmentWarning.setForeground(Color.RED);
+        c.gridy = 4;
+        c.insets = new Insets(0, 6, 6, 6);
+        form.add(legacyDepartmentWarning, c);
+
         c.gridwidth = 1;
         c.insets = new Insets(6, 6, 6, 6);
         c.anchor = GridBagConstraints.LINE_END;
         c.gridx = 0;
-        c.gridy = 3;
-        form.add(new JLabel("학과"), c);
-        c.gridy = 5;
+        c.gridy = 6;
         form.add(new JLabel("새 비밀번호"), c);
 
         c.gridx = 1;
         c.gridwidth = 2;
         c.anchor = GridBagConstraints.LINE_START;
         c.fill = GridBagConstraints.HORIZONTAL;
-        departmentField.setColumns(16);
         passwordField.setColumns(16);
-        c.gridy = 3;
-        form.add(departmentField, c);
-        c.gridy = 4;
+        c.gridy = 5;
         c.fill = GridBagConstraints.NONE;
         form.add(dormitoryCheckBox, c);
-        c.gridy = 5;
+        c.gridy = 6;
         c.fill = GridBagConstraints.HORIZONTAL;
         form.add(passwordField, c);
 
@@ -140,7 +153,11 @@ public class UserEditPanel extends JPanel {
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
             editingUser = (User) response.getPayload();
-            departmentField.setText(editingUser.getDepartment());
+            boolean found = departmentPicker.setSelection(editingUser.getDepartment());
+            // 옛날 자유 입력 시절 값이라 트리에 없으면 드롭다운은 첫 항목 그대로고, 저장하면
+            // 그 첫 항목으로 바뀐다 — 관리자가 알아채도록 경고를 띄운다.
+            legacyDepartmentWarning.setText(found ? " "
+                    : "⚠ 현재 값 \"" + editingUser.getDepartment() + "\"은 목록에 없습니다. 아래에서 새로 골라야 저장됩니다.");
             dormitoryCheckBox.setSelected(editingUser.isDormitory());
             passwordField.setText(""); // 기존 비밀번호는 화면에 띄우지 않는다
             resultLabel.setText("조회됨: " + editingUser.getId()
@@ -156,19 +173,19 @@ public class UserEditPanel extends JPanel {
 
     /** 조회에 성공하기 전까지는 수정/저장을 막는다 (save()가 editingUser를 그대로 쓰기 때문). */
     private void setEditingEnabled(boolean enabled) {
-        departmentField.setEnabled(enabled);
+        departmentPicker.setEnabled(enabled);
         dormitoryCheckBox.setEnabled(enabled);
         passwordField.setEnabled(enabled);
         saveButton.setEnabled(enabled);
         if (!enabled) {
-            departmentField.setText("");
             dormitoryCheckBox.setSelected(false);
             passwordField.setText("");
+            legacyDepartmentWarning.setText(" ");
         }
     }
 
     private void save() {
-        editingUser.setDepartment(departmentField.getText());
+        editingUser.setDepartment(departmentPicker.getSelectedDepartmentName());
         editingUser.setDormitory(dormitoryCheckBox.isSelected());
         String password = new String(passwordField.getPassword());
         if (!password.isEmpty()) {
@@ -177,6 +194,7 @@ public class UserEditPanel extends JPanel {
         Packet request = Packet.request(RequestType.USER_UPDATE, editingUser);
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
+            legacyDepartmentWarning.setText(" "); // 방금 트리에 있는 값으로 저장했으니 경고를 지운다
             JOptionPane.showMessageDialog(this, "저장되었습니다.");
         } else {
             JOptionPane.showMessageDialog(this, response.getErrorMessage(), "저장 실패", JOptionPane.ERROR_MESSAGE);

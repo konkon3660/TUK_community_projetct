@@ -75,6 +75,7 @@ public class MainFrame extends JFrame {
             frame.registerScreen("login", new LoginPanel(frame));
             frame.registerScreen("register", new RegisterPanel(frame));
             frame.registerScreen("home", new HomePanel(frame));
+            frame.registerScreen("boardMenu", new BoardMenuPanel(frame));
             frame.registerScreen("postList", new PostListPanel(frame));
             frame.registerScreen("postDetail", new PostDetailPanel(frame));
             frame.registerScreen("postEditor", new PostEditorPanel(frame));
@@ -87,6 +88,7 @@ public class MainFrame extends JFrame {
             frame.registerScreen("userEdit", new UserEditPanel(frame));
             frame.registerScreen("admin", new AdminPanel(frame));
             frame.registerScreen("recommend", new RecommendPanel(frame));
+            frame.registerScreen("timetableEditor", new TimetableEditorPanel(frame));
             frame.switchTo("login");
             frame.setVisible(true);
         });

@@ -16,6 +16,7 @@ public class ChatRoom implements Serializable {
 
     private final String roomId;
     private final String ownerId;
+    private String name = ""; // 방 이름 (검색용). 이름 도입 전에 저장된 방은 빈 문자열
     private final List<String> memberIds;
     private final List<Chat> chats;
     private int maxMembers; // -1 = 무제한
@@ -43,6 +44,14 @@ public class ChatRoom implements Serializable {
 
     public String getOwnerId() {
         return ownerId;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name == null ? "" : name;
     }
 
     public List<String> getMemberIds() {
@@ -170,35 +179,61 @@ public class ChatRoom implements Serializable {
     }
 
     public String toDataString() {
-        String deptEncoded = String.join(DataFormat.LIST_DELIM, departmentLimit);
-        String memberEncoded = String.join(DataFormat.LIST_DELIM, memberIds);
+        String deptEncoded = encodeList(departmentLimit);
+        String memberEncoded = encodeList(memberIds);
         String chatsEncoded = chats.stream()
                 .map(Chat::toDataString)
                 .collect(Collectors.joining(DataFormat.SUBLIST_DELIM));
-        String pendingEncoded = pendingJoinRequests.entrySet().stream()
-                .map(e -> e.getKey() + DataFormat.MAP_ENTRY_DELIM + e.getValue())
-                .collect(Collectors.joining(DataFormat.LIST_DELIM));
-        String nicknamesEncoded = nicknames.entrySet().stream()
-                .map(e -> e.getKey() + DataFormat.MAP_ENTRY_DELIM + e.getValue())
-                .collect(Collectors.joining(DataFormat.LIST_DELIM));
+        String pendingEncoded = encodeMap(pendingJoinRequests);
+        String nicknamesEncoded = encodeMap(nicknames);
+        // name은 나중에 추가된 필드라 맨 뒤에 붙인다 — 필드 순서를 중간에서 바꾸면 기존 .dat이 깨진다.
         return String.join(DataFormat.FIELD_DELIM,
-                roomId, ownerId, String.valueOf(maxMembers),
+                DataFormat.encode(roomId), DataFormat.encode(ownerId), String.valueOf(maxMembers),
                 admissionYearLimit == null ? "" : String.valueOf(admissionYearLimit),
                 deptEncoded, String.valueOf(dormOnlyLimit), String.valueOf(inviteBypassesLimit),
-                memberEncoded, chatsEncoded, pendingEncoded, nicknamesEncoded);
+                memberEncoded, chatsEncoded, pendingEncoded, nicknamesEncoded,
+                DataFormat.encode(name));
+    }
+
+    /** 리스트 필드는 쉼표로 이어붙이므로 원소 하나하나를 encode한다. */
+    private static String encodeList(List<String> values) {
+        return values.stream().map(DataFormat::encode).collect(Collectors.joining(DataFormat.LIST_DELIM));
+    }
+
+    /** "키:값"을 쉼표로 이어붙인다. 키와 값을 모두 encode하므로 가입 신청 메세지나 닉네임에
+     *  콜론·쉼표가 들어가도 안전하다 (예: "3시:30분에 가능해요, 늦으면 말씀해주세요"). */
+    private static String encodeMap(Map<String, String> map) {
+        return map.entrySet().stream()
+                .map(e -> DataFormat.encode(e.getKey()) + DataFormat.MAP_ENTRY_DELIM
+                        + DataFormat.encode(e.getValue()))
+                .collect(Collectors.joining(DataFormat.LIST_DELIM));
+    }
+
+    private static List<String> decodeList(String encoded) {
+        return Arrays.stream(encoded.split(Pattern.quote(DataFormat.LIST_DELIM)))
+                .map(DataFormat::decode)
+                .collect(Collectors.toList());
+    }
+
+    private static void decodeMapInto(String encoded, Map<String, String> target) {
+        for (String entry : encoded.split(Pattern.quote(DataFormat.LIST_DELIM))) {
+            String[] kv = entry.split(Pattern.quote(DataFormat.MAP_ENTRY_DELIM), 2);
+            target.put(DataFormat.decode(kv[0]), DataFormat.decode(kv[1]));
+        }
     }
 
     public static ChatRoom fromDataString(String line) {
         String[] f = line.split(Pattern.quote(DataFormat.FIELD_DELIM), -1);
-        ChatRoom room = new ChatRoom(f[0], f[1], Integer.parseInt(f[2]));
+        ChatRoom room = new ChatRoom(DataFormat.decode(f[0]), DataFormat.decode(f[1]),
+                Integer.parseInt(f[2]));
         room.admissionYearLimit = f[3].isEmpty() ? null : Integer.parseInt(f[3]);
         if (!f[4].isEmpty()) {
-            room.departmentLimit.addAll(Arrays.asList(f[4].split(DataFormat.LIST_DELIM)));
+            room.departmentLimit.addAll(decodeList(f[4]));
         }
         room.dormOnlyLimit = Boolean.parseBoolean(f[5]);
         room.inviteBypassesLimit = Boolean.parseBoolean(f[6]);
         if (!f[7].isEmpty()) {
-            room.memberIds.addAll(Arrays.asList(f[7].split(DataFormat.LIST_DELIM)));
+            room.memberIds.addAll(decodeList(f[7]));
         }
         if (!f[8].isEmpty()) {
             for (String part : f[8].split(Pattern.quote(DataFormat.SUBLIST_DELIM))) {
@@ -206,16 +241,14 @@ public class ChatRoom implements Serializable {
             }
         }
         if (!f[9].isEmpty()) {
-            for (String entry : f[9].split(DataFormat.LIST_DELIM)) {
-                String[] kv = entry.split(DataFormat.MAP_ENTRY_DELIM, 2);
-                room.pendingJoinRequests.put(kv[0], kv[1]);
-            }
+            decodeMapInto(f[9], room.pendingJoinRequests);
         }
         if (!f[10].isEmpty()) {
-            for (String entry : f[10].split(DataFormat.LIST_DELIM)) {
-                String[] kv = entry.split(DataFormat.MAP_ENTRY_DELIM, 2);
-                room.nicknames.put(kv[0], kv[1]);
-            }
+            decodeMapInto(f[10], room.nicknames);
+        }
+        // 이름 필드 도입 전에 저장된 11필드 .dat도 그대로 읽혀야 한다 — 없으면 빈 이름.
+        if (f.length > 11) {
+            room.name = DataFormat.decode(f[11]);
         }
         return room;
     }

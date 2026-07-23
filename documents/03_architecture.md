@@ -51,8 +51,9 @@
 ServerMain.main()
   ↓
 new DataStore()
-  ├ registerBoards() : 게시판 8개를 boardKey와 함께 등록
-  │                    ("free", "groupbuy", "dorm", "notice", "complaint", 학과 3개)
+  ├ registerBoards() : 게시판을 boardKey와 함께 등록
+  │                    (고정 5개: "free", "groupbuy", "dorm", "notice", "complaint"
+  │                    + AcademicStructure를 순회해 자동 등록되는 학과별 게시판 40개)
   └ loadAll()        : 모든 게시판 .dat + users.dat + chatrooms/*.dat 를 메모리로 로드
   ↓
 new SessionRegistry()    ← 접속자 목록 (처음엔 비어 있음)

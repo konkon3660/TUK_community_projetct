@@ -111,6 +111,19 @@ public class PostListPanel extends JPanel {
     public void open(String boardKey, String backTarget) {
         this.boardKey = boardKey;
         this.backTarget = backTarget;
+        refresh();
+    }
+
+    /**
+     * 마지막으로 연 게시판을 서버에서 다시 받아온다. 이 화면은 posts를 들고 있는 사본이라
+     * 상세/에디터에서 글을 저장·삭제하고 돌아오면 목록이 낡은 채로 보인다. 그래서 돌아오기
+     * 직전에 이걸 부른다 (PostDetailPanel/PostEditorPanel/GroupBuyPostEditorPanel은 backTarget을
+     * 모르기 때문에 open(boardKey, backTarget)을 대신 부를 수 없다).
+     */
+    public void refresh() {
+        if (boardKey == null) {
+            return; // 아직 한 번도 열지 않았으면 새로고침할 게시판이 없다
+        }
         Packet request = Packet.request(RequestType.POST_LIST, boardKey);
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {

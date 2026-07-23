@@ -1,6 +1,5 @@
 package client.GUI;
 
-import java.awt.Color;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -23,7 +22,9 @@ import model.protocol.ResponseStatus;
 public class RegisterPanel extends JPanel {
     private final MainFrame mainFrame;
     private final JTextField idField = new JTextField();
-    private final JTextField departmentField = new JTextField();
+    // 학과는 자유 텍스트가 아니라 단과대→학부→학과 3단 드롭다운으로 고른다 (오타로 학과
+    // 게시판·공지 대상에서 빠지는 것을 막는다).
+    private final DepartmentPickerPanel departmentPicker = new DepartmentPickerPanel(false);
     private final JCheckBox dormitoryCheckBox = new JCheckBox("기숙사생");
     private final JPasswordField passwordField = new JPasswordField();
     private final JButton registerButton = new JButton("가입하기");
@@ -35,7 +36,6 @@ public class RegisterPanel extends JPanel {
         backButton.addActionListener(e -> mainFrame.switchTo("login"));
         // 입력칸에서 엔터를 쳐도 가입되게 한다 (LoginPanel과 동일한 조작감).
         idField.addActionListener(e -> attemptRegister());
-        departmentField.addActionListener(e -> attemptRegister());
         passwordField.addActionListener(e -> attemptRegister());
         initLayout();
     }
@@ -64,43 +64,35 @@ public class RegisterPanel extends JPanel {
         c.gridy = 1;
         form.add(new JLabel("학번"), c);
         c.gridy = 2;
-        form.add(new JLabel("학과"), c);
-        c.gridy = 3;
         form.add(new JLabel("비밀번호"), c);
 
         c.gridx = 1;
         c.anchor = GridBagConstraints.LINE_START;
         c.fill = GridBagConstraints.HORIZONTAL;
         idField.setColumns(16);
-        departmentField.setColumns(16);
         passwordField.setColumns(16);
         c.gridy = 1;
         form.add(idField, c);
         c.gridy = 2;
-        form.add(departmentField, c);
-        c.gridy = 3;
         form.add(passwordField, c);
 
-        c.gridy = 4;
+        // 학과 픽커는 라벨 3개(단과대/학부/학과)를 자체적으로 그리므로 한 줄 전체를 차지한다.
+        c.gridx = 0;
+        c.gridy = 3;
+        c.gridwidth = 2;
         c.fill = GridBagConstraints.NONE;
+        c.anchor = GridBagConstraints.LINE_START;
+        form.add(departmentPicker, c);
+
+        c.gridy = 4;
         c.insets = new Insets(0, 6, 0, 6);
         form.add(dormitoryCheckBox, c);
-
-        // 학과명이 서버에 등록된 이름과 한 글자라도 다르면 학과 게시판에 들어갈 수 없다.
-        JLabel hint = new JLabel("※ 학과는 서버에 등록된 학과명과 정확히 같아야 합니다");
-        hint.setFont(hint.getFont().deriveFont(11f));
-        hint.setForeground(Color.GRAY);
-        c.gridx = 0;
-        c.gridy = 5;
-        c.gridwidth = 2;
-        c.anchor = GridBagConstraints.CENTER;
-        c.insets = new Insets(10, 6, 0, 6);
-        form.add(hint, c);
 
         JPanel buttons = new JPanel();
         buttons.add(registerButton);
         buttons.add(backButton);
-        c.gridy = 6;
+        c.gridy = 5;
+        c.anchor = GridBagConstraints.CENTER;
         c.insets = new Insets(14, 6, 0, 6);
         form.add(buttons, c);
 
@@ -109,7 +101,7 @@ public class RegisterPanel extends JPanel {
 
     private void attemptRegister() {
         String id = idField.getText();
-        String department = departmentField.getText();
+        String department = departmentPicker.getSelectedDepartmentName();
         boolean dormitory = dormitoryCheckBox.isSelected();
         String password = new String(passwordField.getPassword());
         // 회원가입으로 만드는 계정은 관리자가 아니다.
@@ -129,8 +121,8 @@ public class RegisterPanel extends JPanel {
 
     private void clearFields() {
         idField.setText("");
-        departmentField.setText("");
         passwordField.setText("");
         dormitoryCheckBox.setSelected(false);
+        // 학과 드롭다운은 비밀번호처럼 민감한 값이 아니라 그대로 둬도 무방하다.
     }
 }

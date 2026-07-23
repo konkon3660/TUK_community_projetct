@@ -36,7 +36,7 @@
 
 ---
 
-## 2. `RequestType` — 요청 22종과 payload 표
+## 2. `RequestType` — 요청 23종과 payload 표
 
 | RequestType | 요청 payload | 응답 payload | 락 | 비고 |
 |---|---|---|:---:|---|
@@ -58,12 +58,13 @@
 | `CHATROOM_JOIN_APPROVE` | `ChatRoomJoinDecision` | 없음 | ✔ | 방장 전용 |
 | `CHATROOM_JOIN_REJECT` | `ChatRoomJoinDecision` | 없음 | ✔ | 방장 전용 |
 | `CHAT_SEND` | `ChatSendRequest` | 없음 | ✔ | 다른 멤버에게 푸시 발생 |
+| `CHATROOM_SET_NICKNAME` | `ChatRoomNicknameRequest` | 없음 | ✔ | 참여자 전용(2026-07-23 추가) |
 | `CHATROOM_LIST` | 없음 | `List<model.ChatRoom>` | | 조회 전용. 채팅방 탐색/검색 화면용 |
 | `CHAT_MESSAGE_PUSH` | — | `ChatPushPayload` | | **서버 전용 푸시** |
 | `NOTICE_PUSH` | — | `model.boards.NoticePost` | | **서버 전용 푸시** |
 | `DISCONNECT` | 없음 | 없음 | | 연결 종료 통지 (응답 없이 루프 종료) |
 
-"락" 열이 ✔ 인 것이 `ClientHandler.SYNCHRONIZED_TYPES`(12종)입니다.
+"락" 열이 ✔ 인 것이 `ClientHandler.SYNCHRONIZED_TYPES`(13종)입니다.
 자세한 내용은 [03_architecture.md §5](03_architecture.md)를 보세요.
 
 ### 2.1 `POST_LIST`의 게시판별 응답 차이
@@ -124,7 +125,7 @@
 
 ---
 
-## 3. payload DTO 10종 (`model/protocol/`)
+## 3. payload DTO 11종 (`model/protocol/`)
 
 전부 `Serializable` + 불변입니다.
 
@@ -138,6 +139,7 @@
 | `ChatRoomJoinRequest` | `roomId`, `message` | `CHATROOM_JOIN_REQUEST` |
 | `ChatRoomJoinDecision` | `roomId`, `userId` | `CHATROOM_JOIN_APPROVE`, `CHATROOM_JOIN_REJECT` |
 | `ChatSendRequest` | `roomId`, `content` | `CHAT_SEND` |
+| `ChatRoomNicknameRequest` | `roomId`, `nickname` | `CHATROOM_SET_NICKNAME` |
 | `ChatPushPayload` | `roomId`, `chat: Chat` | `CHAT_MESSAGE_PUSH` (서버 푸시) |
 | `FileTransfer` | `fileName`, `data: byte[]` | `FILE_UPLOAD`(요청), `FILE_DOWNLOAD`(응답) |
 

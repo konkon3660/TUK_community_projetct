@@ -39,6 +39,7 @@ public class RecommendPanel extends JPanel {
     private final JLabel activityStatusLabel = new JLabel();
     private final JLabel activityResultLabel = new JLabel();
     private final JButton activityRefreshButton = new JButton("할 거 다시 추천받기");
+    private final JButton timetableEditButton = new JButton("시간표 입력/수정");
 
     // 메뉴 탭
     private final JTextArea todayMenuArea = new JTextArea();
@@ -54,6 +55,7 @@ public class RecommendPanel extends JPanel {
         this.mainFrame = mainFrame;
         backButton.addActionListener(e -> mainFrame.switchTo("home"));
         activityRefreshButton.addActionListener(e -> refreshActivity());
+        timetableEditButton.addActionListener(e -> openTimetableEditor());
         menuRefreshButton.addActionListener(e -> refreshMenu());
         bookRefreshButton.addActionListener(e -> refreshBook());
         initLayout();
@@ -67,9 +69,7 @@ public class RecommendPanel extends JPanel {
         });
     }
 
-    /** tabs에 할거/메뉴/책 3개 탭을 만들고 각 Recommender를 호출해 결과를 보여주는 부분 — 디자인은 자유.
-     *  예: menuRecommender.recommendTwoRandom(), bookRecommender.recommendForDepartment(
-     *  mainFrame.getCurrentUser().getDepartment()), activityRecommender.recommendNow(...)(현재 TODO). */
+    /** tabs에 할거/메뉴/책 3개 탭을 만들고 각 Recommender를 호출해 결과를 보여주는 부분 — 디자인은 자유. */
     private void initLayout() {
         setLayout(new BorderLayout(0, 12));
         setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 32));
@@ -100,7 +100,7 @@ public class RecommendPanel extends JPanel {
         body.add(Box.createVerticalStrut(12));
         body.add(activityResultLabel);
 
-        return wrapWithButton(body, activityRefreshButton);
+        return wrapWithButton(body, activityRefreshButton, timetableEditButton);
     }
 
     private JPanel buildMenuTab() {
@@ -130,14 +130,22 @@ public class RecommendPanel extends JPanel {
         return wrapWithButton(body, bookRefreshButton);
     }
 
-    /** 탭 3개가 전부 "내용 + 아래쪽 다시받기 버튼" 구조라 껍데기만 공통으로 뽑았다. */
-    private JPanel wrapWithButton(JPanel body, JButton button) {
+    /** 탭 3개가 전부 "내용 + 아래쪽 버튼 줄" 구조라 껍데기만 공통으로 뽑았다. */
+    private JPanel wrapWithButton(JPanel body, JButton... buttons) {
         JPanel tab = new JPanel(new BorderLayout());
-        JPanel buttons = new JPanel();
-        buttons.add(button);
+        JPanel buttonRow = new JPanel();
+        for (JButton button : buttons) {
+            buttonRow.add(button);
+        }
         tab.add(body, BorderLayout.CENTER);
-        tab.add(buttons, BorderLayout.SOUTH);
+        tab.add(buttonRow, BorderLayout.SOUTH);
         return tab;
+    }
+
+    /** 시간표 편집 화면으로 이동. 돌아오면 componentShown이 다시 refreshAll()을 부르므로 새로고침은 필요 없다. */
+    private void openTimetableEditor() {
+        ((TimetableEditorPanel) mainFrame.getScreen("timetableEditor")).open();
+        mainFrame.switchTo("timetableEditor");
     }
 
     private void refreshAll() {

@@ -60,6 +60,19 @@ public class ActivityRecommender {
         return result;
     }
 
+    /** 시간표 편집 화면(TimetableEditorPanel)이 저장 버튼에서 호출. 파일 전체를 덮어쓴다. */
+    public void saveTimetable(List<TimetableEntry> timetable) {
+        List<String> lines = new ArrayList<>();
+        for (TimetableEntry entry : timetable) {
+            lines.add(entry.toDataString());
+        }
+        try {
+            FileStorage.writeLines(TIMETABLE_PATH, lines);
+        } catch (IOException e) {
+            throw new UncheckedIOException("시간표 저장 실패: " + TIMETABLE_PATH, e);
+        }
+    }
+
     /**
      * now 시각 기준으로 timetable 상의 공강 시간을 계산해서, 그 시간 안에 끝낼 수 있는 할 거리를 추천한다.
      * 후보가 여럿이면 그 중 무작위 1개 — 같은 공강에서 버튼을 다시 눌러도 다른 게 나오게 하기 위함이다.

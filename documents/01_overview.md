@@ -138,6 +138,8 @@ java -cp out client.GUI.MainFrame
   다른 컴퓨터에서 접속하려면 `MainFrame`의 `SERVER_HOST`를 서버 IP로 바꾸면 됩니다.
 - **클라이언트는 서버가 켜져 있어야 시작됩니다** (`MainFrame.main`이 접속부터 합니다).
 - `out/`은 `.gitignore`에 있으니 커밋되지 않습니다.
+- **로그인할 테스트 계정**은 [08_status.md §4-2](08_status.md)의 표에 있습니다
+  (관리자 `2026000001` / `admin01`, 학생 `2026591007` / `pass01` 등).
 
 ---
 

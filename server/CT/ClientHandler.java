@@ -31,6 +31,7 @@ import model.boards.Post;
 import model.protocol.ChatPushPayload;
 import model.protocol.ChatRoomJoinDecision;
 import model.protocol.ChatRoomJoinRequest;
+import model.protocol.ChatRoomNicknameRequest;
 import model.protocol.ChatSendRequest;
 import model.protocol.CommentAddRequest;
 import model.protocol.CommentDeleteRequest;
@@ -57,7 +58,7 @@ public class ClientHandler implements Runnable {
             RequestType.COMMENT_ADD, RequestType.COMMENT_DELETE,
             RequestType.CHATROOM_CREATE, RequestType.CHATROOM_JOIN_REQUEST,
             RequestType.CHATROOM_JOIN_APPROVE, RequestType.CHATROOM_JOIN_REJECT,
-            RequestType.CHAT_SEND);
+            RequestType.CHAT_SEND, RequestType.CHATROOM_SET_NICKNAME);
 
     /** 업로드된 첨부파일/이미지가 쌓이는 곳. 게시판 .dat들과 같은 server/data 아래에 둔다. */
     private static final Path UPLOAD_DIR = Path.of("server/data/files");
@@ -158,6 +159,8 @@ public class ClientHandler implements Runnable {
                 return handleChatRoomJoinReject(request);
             case CHAT_SEND:
                 return handleChatSend(request);
+            case CHATROOM_SET_NICKNAME:
+                return handleChatRoomSetNickname(request);
             case CHATROOM_LIST:
                 return handleChatRoomList(request);
             default:
@@ -440,6 +443,7 @@ public class ClientHandler implements Runnable {
         ChatRoom template = (ChatRoom) request.getPayload();
         // roomId는 클라이언트가 보낸 값을 쓰지 않고 서버가 채번한다 (001, 002, ... 형식).
         ChatRoom room = new ChatRoom(nextRoomId(), currentUser.getId(), template.getMaxMembers());
+        room.setName(template.getName());
         room.setAdmissionYearLimit(template.getAdmissionYearLimit());
         room.getDepartmentLimit().addAll(template.getDepartmentLimit());
         room.setDormOnlyLimit(template.isDormOnlyLimit());
@@ -497,6 +501,22 @@ public class ClientHandler implements Runnable {
         return Packet.success(request, null);
     }
 
+    /** 이 방 안에서 쓸 프로필 이름을 바꾼다. 채팅과 같은 기준으로 참여자만 가능하다. */
+    private Packet handleChatRoomSetNickname(Packet request) {
+        requireLogin();
+        ChatRoomNicknameRequest payload = (ChatRoomNicknameRequest) request.getPayload();
+        ChatRoom room = dataStore.getChatRoom(payload.getRoomId());
+        if (!room.getMemberIds().contains(currentUser.getId())) {
+            throw new IllegalStateException("참여 중이 아닌 채팅방입니다: " + room.getRoomId());
+        }
+        if (isBlank(payload.getNickname())) {
+            throw new IllegalArgumentException("닉네임이 비어 있습니다");
+        }
+        room.setNickname(currentUser.getId(), payload.getNickname().trim());
+        dataStore.saveChatRoom(room);
+        return Packet.success(request, null);
+    }
+
     private Packet handleChatRoomList(Packet request) {
         requireLogin();
         return Packet.success(request, dataStore.getAllChatRooms());
@@ -545,6 +565,7 @@ public class ClientHandler implements Runnable {
     private ChatRoom createLinkedChatRoom(GroupBuyPost post) {
         ChatRoom room = new ChatRoom(nextRoomId(), currentUser.getId(),
                 requireGroupBuyMaxMembers(post.getMaxMembers()));
+        room.setName(post.getTitle()); // 방 이름은 글 제목 — 목록/검색에서 어떤 공동구매인지 바로 보이게
         room.getMemberIds().add(currentUser.getId()); // 글쓴이가 방장 겸 첫 참여자
         return room;
     }

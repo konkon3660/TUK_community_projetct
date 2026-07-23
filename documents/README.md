@@ -17,6 +17,9 @@
 | [06_gui.md](06_gui.md) | 화면 15개 목록, 화면 전환·서버 요청 컨벤션 | GUI를 만들 때 |
 | [07_class_diagram.md](07_class_diagram.md) | 클래스 다이어그램 작성용 정리 (제출물용) | 다이어그램을 그릴 때 |
 | [08_status.md](08_status.md) | **진행 현황과 남은 작업 (단일 출처)** | "나 뭐 하면 돼?" |
+| [09_usecase_diagram.md](09_usecase_diagram.md) | 유스케이스 다이어그램 작성용 정리 (제출물용) | 다이어그램을 그릴 때 |
+| [10_activity_diagram.md](10_activity_diagram.md) | 액티비티 다이어그램 작성용 정리 (제출물용) | 다이어그램을 그릴 때 |
+| [11_sequence_diagram.md](11_sequence_diagram.md) | 시퀀스 다이어그램 작성용 정리 (제출물용) | 다이어그램을 그릴 때 |
 | [99_meeting_notes.md](99_meeting_notes.md) | 07/22·07/23 회의 원문 기록 | 결정 배경이 궁금할 때 |
 
 ## 문서 규칙
