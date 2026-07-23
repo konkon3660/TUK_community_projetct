@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import javax.swing.JFrame;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 
@@ -68,8 +69,16 @@ public class MainFrame extends JFrame {
         ((CardLayout) screens.getLayout()).show(screens, name);
     }
 
-    public static void main(String[] args) throws IOException {
-        ServerConnection connection = new ServerConnection(SERVER_HOST, SERVER_PORT);
+    public static void main(String[] args) {
+        String host = args.length > 0 ? args[0] : SERVER_HOST;
+        int port = args.length > 1 ? Integer.parseInt(args[1]) : SERVER_PORT;
+        ServerConnection connection;
+        try {
+            connection = new ServerConnection(host, port);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, e.getMessage(), "서버 연결 실패", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
         SwingUtilities.invokeLater(() -> {
             MainFrame frame = new MainFrame(connection);
             frame.registerScreen("login", new LoginPanel(frame));

@@ -58,7 +58,7 @@ public class ClientHandler implements Runnable {
             RequestType.COMMENT_ADD, RequestType.COMMENT_DELETE,
             RequestType.CHATROOM_CREATE, RequestType.CHATROOM_JOIN_REQUEST,
             RequestType.CHATROOM_JOIN_APPROVE, RequestType.CHATROOM_JOIN_REJECT,
-            RequestType.CHAT_SEND, RequestType.CHATROOM_SET_NICKNAME);
+            RequestType.CHAT_SEND, RequestType.CHATROOM_SET_NICKNAME, RequestType.CHATROOM_DELETE);
 
     /** 업로드된 첨부파일/이미지가 쌓이는 곳. 게시판 .dat들과 같은 server/data 아래에 둔다. */
     private static final Path UPLOAD_DIR = Path.of("server/data/files");
@@ -163,6 +163,8 @@ public class ClientHandler implements Runnable {
                 return handleChatRoomSetNickname(request);
             case CHATROOM_LIST:
                 return handleChatRoomList(request);
+            case CHATROOM_DELETE:
+                return handleChatRoomDelete(request);
             default:
                 throw new IllegalArgumentException("클라이언트가 보낼 수 없는 요청 타입: " + request.getType());
         }
@@ -520,6 +522,22 @@ public class ClientHandler implements Runnable {
     private Packet handleChatRoomList(Packet request) {
         requireLogin();
         return Packet.success(request, dataStore.getAllChatRooms());
+    }
+
+    /**
+     * 채팅방을 삭제한다 (방장 전용). 공동구매 글에 연결된 방이어도 그대로 지운다 —
+     * 그 글은 findLinkedRoom()이 CHATROOM_LIST에서 이 roomId를 못 찾게 되어 연동 전 예전 글과
+     * 같은 방식(참여 인원 "?"·채팅방 진입 버튼 숨김)으로 자연히 처리된다.
+     */
+    private Packet handleChatRoomDelete(Packet request) {
+        requireLogin();
+        String roomId = (String) request.getPayload();
+        ChatRoom room = dataStore.getChatRoom(roomId);
+        if (!room.canDelete(currentUser)) {
+            throw new IllegalStateException("방장만 채팅방을 삭제할 수 있습니다: " + roomId);
+        }
+        dataStore.removeChatRoom(roomId);
+        return Packet.success(request, null);
     }
 
     // ── 핸들러 공용 헬퍼 ────────────────────────────────────────────────────

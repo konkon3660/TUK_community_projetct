@@ -3,7 +3,9 @@ package client.CT;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -19,6 +21,7 @@ import model.protocol.RequestType;
  */
 public class ServerConnection {
     private static final long RESPONSE_TIMEOUT_SECONDS = 10;
+    private static final int CONNECT_TIMEOUT_MILLIS = 5000;
 
     private final Socket socket;
     private final ObjectOutputStream out;
@@ -27,7 +30,16 @@ public class ServerConnection {
     private volatile PushListener pushListener;
 
     public ServerConnection(String host, int port) throws IOException {
-        socket = new Socket(host, port);
+        socket = new Socket();
+        // new Socket(host, port)는 연결 타임아웃이 없어서, 네트워크가 패킷을 조용히 버리는 상황
+        // (예: 같은 와이파이라도 AP/클라이언트 아이솔레이션이 걸려있는 경우)에서는 OS 타임아웃까지
+        // 무한정 블로킹한다. 명시적으로 타임아웃을 걸어 몇 초 안에 실패하도록 한다.
+        try {
+            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MILLIS);
+        } catch (SocketTimeoutException e) {
+            throw new IOException("서버(" + host + ":" + port + ")에 연결할 수 없습니다. "
+                    + "같은 네트워크인지, 서버가 켜져 있는지, 두 기기 사이 통신이 막혀있지 않은지 확인하세요.", e);
+        }
         // 서버 쪽(ClientHandler)과 대칭: ObjectOutputStream을 먼저 만들고 flush한 뒤
         // ObjectInputStream을 만들어야 양쪽 모두 스트림 헤더를 기다리다 멈추지 않는다.
         out = new ObjectOutputStream(socket.getOutputStream());

@@ -36,7 +36,7 @@
 
 ---
 
-## 2. `RequestType` — 요청 23종과 payload 표
+## 2. `RequestType` — 요청 24종과 payload 표
 
 | RequestType | 요청 payload | 응답 payload | 락 | 비고 |
 |---|---|---|:---:|---|
@@ -60,11 +60,12 @@
 | `CHAT_SEND` | `ChatSendRequest` | 없음 | ✔ | 다른 멤버에게 푸시 발생 |
 | `CHATROOM_SET_NICKNAME` | `ChatRoomNicknameRequest` | 없음 | ✔ | 참여자 전용(2026-07-23 추가) |
 | `CHATROOM_LIST` | 없음 | `List<model.ChatRoom>` | | 조회 전용. 채팅방 탐색/검색 화면용 |
+| `CHATROOM_DELETE` | `String`(roomId) | 없음 | ✔ | **방장 전용**(2026-07-24 추가). `ChatRoom.canDelete()` |
 | `CHAT_MESSAGE_PUSH` | — | `ChatPushPayload` | | **서버 전용 푸시** |
 | `NOTICE_PUSH` | — | `model.boards.NoticePost` | | **서버 전용 푸시** |
 | `DISCONNECT` | 없음 | 없음 | | 연결 종료 통지 (응답 없이 루프 종료) |
 
-"락" 열이 ✔ 인 것이 `ClientHandler.SYNCHRONIZED_TYPES`(13종)입니다.
+"락" 열이 ✔ 인 것이 `ClientHandler.SYNCHRONIZED_TYPES`(14종)입니다.
 자세한 내용은 [03_architecture.md §5](03_architecture.md)를 보세요.
 
 ### 2.1 `POST_LIST`의 게시판별 응답 차이

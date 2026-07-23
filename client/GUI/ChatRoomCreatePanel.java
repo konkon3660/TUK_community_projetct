@@ -5,7 +5,6 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.util.Arrays;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -24,6 +23,7 @@ public class ChatRoomCreatePanel extends JPanel {
     private final MainFrame mainFrame;
     private final JTextField nameField = new JTextField(); // 검색용 방 이름, 비워도 됨
     private final JTextField maxMembersField = new JTextField();
+    private final JTextField admissionYearField = new JTextField(); // 4자리 학번 년도, 비우면 제한 없음
     private final JCheckBox dormOnlyCheckBox = new JCheckBox("기숙사생만");
     private final JTextField departmentLimitField = new JTextField(); // 쉼표 구분, 비우면 학과 제한 없음
     private final JButton createButton = new JButton("만들기");
@@ -36,6 +36,7 @@ public class ChatRoomCreatePanel extends JPanel {
         // 입력칸에서 엔터를 쳐도 만들어지게 한다 (RegisterPanel과 동일한 조작감).
         nameField.addActionListener(e -> create());
         maxMembersField.addActionListener(e -> create());
+        admissionYearField.addActionListener(e -> create());
         departmentLimitField.addActionListener(e -> create());
         initLayout();
     }
@@ -66,6 +67,8 @@ public class ChatRoomCreatePanel extends JPanel {
         c.gridy = 2;
         form.add(new JLabel("정원"), c);
         c.gridy = 3;
+        form.add(new JLabel("입학년도 제한"), c);
+        c.gridy = 4;
         form.add(new JLabel("학과 제한"), c);
 
         c.gridx = 1;
@@ -73,24 +76,28 @@ public class ChatRoomCreatePanel extends JPanel {
         c.fill = GridBagConstraints.HORIZONTAL;
         nameField.setColumns(16);
         maxMembersField.setColumns(16);
+        admissionYearField.setColumns(16);
         departmentLimitField.setColumns(16);
         c.gridy = 1;
         form.add(nameField, c);
         c.gridy = 2;
         form.add(maxMembersField, c);
         c.gridy = 3;
+        form.add(admissionYearField, c);
+        c.gridy = 4;
         form.add(departmentLimitField, c);
 
-        c.gridy = 4;
+        c.gridy = 5;
         c.fill = GridBagConstraints.NONE;
         c.insets = new Insets(0, 6, 0, 6);
         form.add(dormOnlyCheckBox, c);
 
-        JLabel hint = new JLabel("※ 방 이름은 검색에 쓰이며 비워도 됨 · 정원은 숫자, -1이면 무제한 · 학과 제한은 쉼표로 구분, 비우면 제한 없음");
+        JLabel hint = new JLabel("<html>※ 방 이름은 검색에 쓰이며 비워도 됨 · 정원은 숫자, -1이면 무제한<br>"
+                + "입학년도 제한은 4자리 학번 년도(예: 2023), 비우면 제한 없음 · 학과 제한은 쉼표로 구분, 비우면 제한 없음</html>");
         hint.setFont(hint.getFont().deriveFont(11f));
         hint.setForeground(Color.GRAY);
         c.gridx = 0;
-        c.gridy = 5;
+        c.gridy = 6;
         c.gridwidth = 2;
         c.anchor = GridBagConstraints.CENTER;
         c.insets = new Insets(10, 6, 0, 6);
@@ -99,7 +106,7 @@ public class ChatRoomCreatePanel extends JPanel {
         JPanel buttons = new JPanel();
         buttons.add(createButton);
         buttons.add(backButton);
-        c.gridy = 6;
+        c.gridy = 7;
         c.insets = new Insets(14, 6, 0, 6);
         form.add(buttons, c);
 
@@ -116,12 +123,33 @@ public class ChatRoomCreatePanel extends JPanel {
                     "채팅방 생성 실패", JOptionPane.ERROR_MESSAGE);
             return;
         }
+        Integer admissionYearLimit;
+        String admissionYearText = admissionYearField.getText().trim();
+        if (admissionYearText.isEmpty()) {
+            admissionYearLimit = null;
+        } else {
+            try {
+                admissionYearLimit = Integer.parseInt(admissionYearText);
+            } catch (NumberFormatException e) {
+                JOptionPane.showMessageDialog(this, "입학년도 제한은 4자리 숫자로 입력하세요 (비우면 제한 없음).",
+                        "채팅방 생성 실패", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+
         // roomId는 서버가 채번해서 응답으로 돌려준다 — 요청에는 빈 문자열로 보낸다.
         ChatRoom newRoom = new ChatRoom("", ownerId, maxMembers);
         newRoom.setName(nameField.getText().trim());
+        newRoom.setAdmissionYearLimit(admissionYearLimit);
         newRoom.setDormOnlyLimit(dormOnlyCheckBox.isSelected());
-        if (!departmentLimitField.getText().isEmpty()) {
-            newRoom.getDepartmentLimit().addAll(Arrays.asList(departmentLimitField.getText().split(",")));
+        if (!departmentLimitField.getText().trim().isEmpty()) {
+            // 사용자가 "학과1, 학과2"처럼 쉼표 뒤에 공백을 넣어도 매치되도록 각 항목을 trim한다.
+            for (String dept : departmentLimitField.getText().split(",")) {
+                String trimmed = dept.trim();
+                if (!trimmed.isEmpty()) {
+                    newRoom.getDepartmentLimit().add(trimmed);
+                }
+            }
         }
         Packet request = Packet.request(RequestType.CHATROOM_CREATE, newRoom);
         Packet response = mainFrame.getConnection().sendRequest(request);
@@ -140,6 +168,7 @@ public class ChatRoomCreatePanel extends JPanel {
     private void clearFields() {
         nameField.setText("");
         maxMembersField.setText("");
+        admissionYearField.setText("");
         departmentLimitField.setText("");
         dormOnlyCheckBox.setSelected(false);
     }

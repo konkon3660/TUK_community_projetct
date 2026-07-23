@@ -166,6 +166,11 @@ public class ChatRoom implements Serializable {
         }
     }
 
+    /** 채팅방 삭제는 방장만 할 수 있다. */
+    public boolean canDelete(User requester) {
+        return requester.getId().equals(ownerId);
+    }
+
     public void setNickname(String userId, String nickname) {
         nicknames.put(userId, nickname);
     }

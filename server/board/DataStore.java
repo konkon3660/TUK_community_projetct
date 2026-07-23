@@ -120,6 +120,17 @@ public class DataStore {
         return new ArrayList<>(chatRooms.values());
     }
 
+    /** 방장 삭제 요청 처리용. 메모리와 .dat 파일 양쪽에서 지운다. */
+    public void removeChatRoom(String roomId) {
+        getChatRoom(roomId); // 없으면 예외
+        chatRooms.remove(roomId);
+        try {
+            Files.deleteIfExists(chatRoomPath(roomId));
+        } catch (IOException e) {
+            throw new UncheckedIOException("채팅방 삭제 실패: " + roomId, e);
+        }
+    }
+
     public void saveChatRoom(ChatRoom room) {
         try {
             FileStorage.writeLines(chatRoomPath(room.getRoomId()),

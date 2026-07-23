@@ -43,6 +43,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
     private final JButton backButton = new JButton("뒤로");
     private final JButton refreshButton = new JButton("새로고침");
     private final JButton nicknameButton = new JButton("닉네임 설정");
+    private final JButton deleteRoomButton = new JButton("채팅방 삭제"); // 방장 전용
     private final JLabel headerLabel = new JLabel();
     private final JTextArea chatArea = new JTextArea();
     private final JPanel pendingPanel = new JPanel(new BorderLayout(0, 6));
@@ -58,6 +59,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         backButton.addActionListener(e -> mainFrame.switchTo("chatRoomList"));
         refreshButton.addActionListener(e -> refresh());
         nicknameButton.addActionListener(e -> promptNickname());
+        deleteRoomButton.addActionListener(e -> deleteRoom());
         approveButton.addActionListener(e -> approveSelectedJoin());
         rejectButton.addActionListener(e -> rejectSelectedJoin());
         // 입력칸에서 엔터를 쳐도 전송되게 한다.
@@ -99,6 +101,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         JPanel bottomButtons = new JPanel();
         bottomButtons.add(sendButton);
         bottomButtons.add(nicknameButton);
+        bottomButtons.add(deleteRoomButton);
         bottomButtons.add(refreshButton);
         bottomButtons.add(backButton);
         bottom.add(messageField, BorderLayout.CENTER);
@@ -200,6 +203,25 @@ public class ChatRoomPanel extends JPanel implements PushListener {
         renderMessages();
     }
 
+    /** 방장 전용: 채팅방을 지운다. 되돌릴 수 없으므로 한 번 확인한다. */
+    private void deleteRoom() {
+        int confirmed = JOptionPane.showConfirmDialog(this,
+                "채팅방을 삭제하면 채팅 기록과 참여자 정보가 모두 사라지고 되돌릴 수 없습니다. 삭제할까요?",
+                "채팅방 삭제", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (confirmed != JOptionPane.YES_OPTION) {
+            return;
+        }
+        Packet request = Packet.request(RequestType.CHATROOM_DELETE, room.getRoomId());
+        Packet response = mainFrame.getConnection().sendRequest(request);
+        if (response.getStatus() == ResponseStatus.OK) {
+            // 목록은 자기가 들고 있는 사본을 그리므로, 새로고침하지 않으면 방금 지운 방이 그대로 보인다.
+            ((ChatRoomListPanel) mainFrame.getScreen("chatRoomList")).refresh();
+            mainFrame.switchTo("chatRoomList");
+        } else {
+            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "채팅방 삭제 실패", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
     /** 방장 전용: 가입 신청을 수락한다. userId는 room.getPendingJoinRequests()의 key. */
     private void approveJoin(String userId) {
         Packet request = Packet.request(RequestType.CHATROOM_JOIN_APPROVE,
@@ -260,6 +282,7 @@ public class ChatRoomPanel extends JPanel implements PushListener {
                 + "   ·   인원 " + room.getMemberIds().size()
                 + "/" + (room.getMaxMembers() == -1 ? "무제한" : room.getMaxMembers())
                 + (isOwner() ? "   ·   내가 방장" : ""));
+        deleteRoomButton.setVisible(isOwner());
 
         StringBuilder text = new StringBuilder();
         for (Chat chat : room.getChats()) {

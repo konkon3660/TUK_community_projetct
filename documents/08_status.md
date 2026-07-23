@@ -41,6 +41,13 @@ GUI **화면 17개 전부 생성 및 전환 확인**,
 확정하고, 회원가입·회원정보수정·공지 대상학과 3곳 전부를 **단과대→학부→학과 3단 드롭다운**
 (`client/GUI/DepartmentPickerPanel`)으로 교체했습니다. 자세한 내용은 [04_data_model.md §7](04_data_model.md).
 
+**2026-07-24 추가 수정**: 채팅방 삭제(방장 전용, `CHATROOM_DELETE` 신설) 추가 — `ChatRoom.canDelete()`,
+`DataStore.removeChatRoom()`, `ChatRoomPanel`의 "채팅방 삭제" 버튼(방장에게만 보임), 확인 다이얼로그까지
+확인함. `documents/02_requirements.md §4.1`, `05_protocol.md §2`도 같은 커밋에서 갱신.
+채팅방 닉네임 설정(§4.2)은 이미 구현되어 있음을 재확인함 — 입장 시 미설정이면 자동으로 물어보고
+(`ChatRoomPanel.open()`), 화면 안 "닉네임 설정" 버튼으로 언제든 바꿀 수 있으며 서버가 참여자만
+허용하고 저장까지 반영함(`ClientHandler.handleChatRoomSetNickname`).
+
 ---
 
 ## 2. 완성된 것 (건드릴 필요 없음)

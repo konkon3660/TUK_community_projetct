@@ -75,6 +75,9 @@ public enum RequestType {
     /** 요청 payload: 없음. 응답 payload: {@code List<model.ChatRoom>}(전체 채팅방 목록) */
     CHATROOM_LIST,
 
+    /** 채팅방을 삭제한다 (방장 전용). 요청 payload: {@code String}(roomId). 응답 payload: 없음 */
+    CHATROOM_DELETE,
+
     /** 서버 전용 푸시(요청 없음). payload: {@link model.protocol.ChatPushPayload}(roomId + 새 Chat) */
     CHAT_MESSAGE_PUSH,
 

@@ -115,17 +115,14 @@ public class PostEditorPanel extends JPanel {
     private void save() {
         String authorId = mainFrame.getCurrentUser().getId();
         boolean isNew = editingPost == null;
+        // editingPost는 PostListPanel/PostDetailPanel이 아직 화면에 들고 있는 바로 그 객체라,
+        // 서버 확인 전에 여기서 직접 고치면 POST_UPDATE가 실패해도 목록/상세에는 이미 새 내용이
+        // (덮어쓴 것처럼) 보인다. 그래서 수정 시에도 새 Post 객체를 만들어 보낸다.
         Post post = isNew
                 ? new Post(generateId(), titleField.getText(), authorId, contentArea.getText(),
                         attachmentPicker.getFilePath(), attachmentPicker.getImagePath(), LocalDateTime.now())
-                : editingPost;
-        if (!isNew) {
-            post.setTitle(titleField.getText());
-            post.setContent(contentArea.getText());
-            // 첨부는 이미 FILE_UPLOAD로 올라가 있고, 여기서는 그 경로만 게시글에 반영한다.
-            post.setFilePath(attachmentPicker.getFilePath());
-            post.setImagePath(attachmentPicker.getImagePath());
-        }
+                : new Post(editingPost.getId(), titleField.getText(), editingPost.getAuthorId(), contentArea.getText(),
+                        attachmentPicker.getFilePath(), attachmentPicker.getImagePath(), editingPost.getCreatedAt());
         RequestType type = isNew ? RequestType.POST_CREATE : RequestType.POST_UPDATE;
         Packet request = Packet.request(type, new PostCreateOrUpdateRequest(boardKey, post));
         Packet response = mainFrame.getConnection().sendRequest(request);
