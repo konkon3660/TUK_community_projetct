@@ -309,12 +309,12 @@ classDiagram
 
 **ClientHandler** (implements `Runnable`)
 - 속성: `«static» SYNCHRONIZED_TYPES: Set<RequestType>`, `«static» DATA_LOCK: Object`,
-  `socket`, `out`, `in`, `currentUser: User`
+  `socket`, `dataStore: DataStore`, `out`, `in`, `currentUser: User`
 - 메서드: `run()`, `sendPacket(Packet)`, `-handleRequest(Packet)`, `-dispatch(Packet)`,
   `-handleLogin/Register/Logout/UserUpdate/PostList/PostCreate/PostUpdate/PostDelete/
   CommentAdd/CommentDelete/ChatRoomCreate/ChatRoomJoinRequest/ChatRoomJoinApprove/
-  ChatRoomJoinReject/ChatSend(Packet)` — **15개 전부 TODO 상태**
-- 다이어그램에는 `handleXxx` 15개를 다 나열하지 말고 `-handleXxx(Packet) Packet «15 methods»`
+  ChatRoomJoinReject/ChatSend/ChatRoomList(Packet)` — **16개 전부 TODO 상태**
+- 다이어그램에는 `handleXxx` 16개를 다 나열하지 말고 `-handleXxx(Packet) Packet «16 methods»`
   정도로 축약 권장
 
 ## C. 추가된 관계

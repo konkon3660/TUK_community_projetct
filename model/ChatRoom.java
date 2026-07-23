@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -92,22 +93,68 @@ public class ChatRoom implements Serializable {
         return pendingJoinRequests;
     }
 
-    /** 입학년도/학과/기숙사 제한 + 정원을 검사해서 가입 가능 여부를 판단 */
+    /**
+     * 입학년도/학과/기숙사 제한 + 정원을 검사해서 가입 가능 여부를 판단.
+     * inviteBypassesLimit은 초대 기능이 아직 없어서 판정에 쓰지 않는다 (값 보관만).
+     */
     public boolean canJoin(User user) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        if (memberIds.contains(user.getId())) {
+            return false;
+        }
+        if (isFull()) {
+            return false;
+        }
+        if (admissionYearLimit != null && !matchesAdmissionYear(user.getId())) {
+            return false;
+        }
+        if (!departmentLimit.isEmpty() && !departmentLimit.contains(user.getDepartment())) {
+            return false;
+        }
+        return !dormOnlyLimit || user.isDormitory();
     }
 
     /** 가입지원 메세지와 함께 신청을 등록 (방장이 approveJoin/rejectJoin으로 처리) */
     public void requestJoin(User user, String applicationMessage) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        if (memberIds.contains(user.getId())) {
+            throw new IllegalStateException("이미 참여 중인 채팅방입니다: " + roomId);
+        }
+        if (!canJoin(user)) {
+            throw new IllegalStateException("가입 조건을 만족하지 않습니다: " + roomId);
+        }
+        pendingJoinRequests.put(user.getId(), applicationMessage);
     }
 
     public void approveJoin(String userId) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        if (!pendingJoinRequests.containsKey(userId)) {
+            throw new NoSuchElementException("가입 신청 내역이 없습니다: " + userId);
+        }
+        if (isFull()) {
+            throw new IllegalStateException("정원이 가득 찼습니다: " + roomId);
+        }
+        pendingJoinRequests.remove(userId);
+        memberIds.add(userId);
     }
 
     public void rejectJoin(String userId) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        if (pendingJoinRequests.remove(userId) == null) {
+            throw new NoSuchElementException("가입 신청 내역이 없습니다: " + userId);
+        }
+    }
+
+    private boolean isFull() {
+        return maxMembers != -1 && memberIds.size() >= maxMembers;
+    }
+
+    /** 학번 앞 4자리(입학년도)가 제한값과 같은지. 학번이 비정상이면 가입 불가로 본다. */
+    private boolean matchesAdmissionYear(String userId) {
+        if (userId.length() < 4) {
+            return false;
+        }
+        try {
+            return Integer.parseInt(userId.substring(0, 4)) == admissionYearLimit;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     public void setNickname(String userId, String nickname) {

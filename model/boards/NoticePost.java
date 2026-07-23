@@ -34,7 +34,14 @@ public class NoticePost extends Post {
 
     /** 대상 학과/기숙사 지정에 따라 이 유저에게 보여야 하는 공지인지 판단 */
     public boolean isVisibleTo(User user) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        if (user.isAdmin()) {
+            return true;
+        }
+        if (dormNotice && !user.isDormitory()) {
+            return false;
+        }
+        // 대상 학과가 비어있으면 전체 공지
+        return targetDepartments.isEmpty() || targetDepartments.contains(user.getDepartment());
     }
 
     @Override

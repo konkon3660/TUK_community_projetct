@@ -1,6 +1,7 @@
 package model.boards;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 import model.User;
 
@@ -24,7 +25,9 @@ public class NoticeBoard extends AbstractBoard {
 
     /** 이 유저의 학과/기숙사 여부에 맞는 공지만 필터링해서 반환 */
     public List<Post> getVisiblePosts(User user) {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        return posts.stream()
+                .filter(p -> ((NoticePost) p).isVisibleTo(user))
+                .collect(Collectors.toList());
     }
 
     @Override

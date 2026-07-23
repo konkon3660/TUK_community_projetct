@@ -1,52 +1,66 @@
 # GUI 작성 가이드 (Swing)
 
 `client/GUI/`는 Swing으로 만든다 (빌드 시스템이 없어서 외부 라이브러리 설치 부담이 없는 게
-중요했음). `MainFrame`/`LoginPanel`에 이미 스켈레톤이 있다 — **화면 레이아웃 자체는 자유지만,
-"화면이 서버와 대화하는 방식"과 "화면 전환 방식"은 아래 패턴을 그대로 따를 것.**
+중요했음). **화면 14개 전부 클래스와 메서드 시그니처까지 이미 만들어져 있다** (컴파일 확인
+완료) — AI에게 새 화면 클래스를 설계하게 하지 말고, 아래 §3 표에 나온 `TODO: 구현 필요`
+메서드 본문만 채우도록 지시할 것. **화면 레이아웃(`initLayout()`) 자체는 자유지만, "화면이
+서버와 대화하는 방식"과 "화면 전환 방식"은 아래 패턴을 그대로 따른다.**
 
 ---
 
 ## 1. `MainFrame`
 
-`CardLayout`으로 화면(JPanel)들을 이름으로 등록해두고 전환하는 셸. `ServerConnection`을 하나만
-만들어서 들고 있고 모든 화면이 공유한다.
+`CardLayout`으로 화면(JPanel)들을 이름으로 등록해두고 전환하는 셸. `ServerConnection`과 로그인한
+`User`(세션)를 하나씩만 만들어서 들고 있고 모든 화면이 공유한다.
 
 - `mainFrame.getConnection()` — 서버로 요청을 보낼 때 사용 (`ServerConnection.sendRequest(Packet)`)
-- `mainFrame.registerScreen(name, panel)` — 화면 등록
+- `mainFrame.getCurrentUser()` / `mainFrame.setCurrentUser(User)` — 로그인한 유저 공유(로그인
+  성공 시 `LoginPanel`이 설정, 이후 다른 화면들이 조회만 함)
+- `mainFrame.registerScreen(name, panel)` — 화면 등록 (`main()`에 이미 14개 전부 등록되어 있음)
 - `mainFrame.switchTo(name)` — 화면 전환
+- `mainFrame.getScreen(name)` — 등록된 화면 인스턴스를 이름으로 꺼냄 (아래 §2 `open(...)` 패턴에서 사용)
 
-## 2. 새 화면 만드는 법 (`LoginPanel` 패턴)
+## 2. 화면 전환 시 데이터 넘기기 — `open(...)` 컨벤션
 
-1. `JPanel`을 상속한다.
-2. 생성자는 `MainFrame mainFrame`을 받아서 필드로 저장한다.
-3. Swing 컴포넌트(버튼, 텍스트필드 등)는 필드로 선언한다.
-4. 버튼 클릭 등 액션 리스너는 생성자에서 바로 연결한다 (`addActionListener`).
-5. 실제 배치는 `initLayout()`처럼 별도 메서드로 분리해도 되고 자유롭게 해도 된다 — 여기는 팀원
-   재량.
-6. 서버에 요청을 보낼 때는 `model/protocol`의 DTO + `Packet.request(RequestType, payload)`를
-   만들어서 `mainFrame.getConnection().sendRequest(request)`로 보낸다 (블로킹으로 응답이 옴).
-   `response.getStatus()`가 `OK`인지 확인하고, `ERROR`면 `response.getErrorMessage()`를 보여준다.
-7. 응답을 받은 뒤 다음 화면으로 넘어가야 하면 `mainFrame.switchTo("화면이름")`을 호출한다.
-8. 서버 푸시(새 채팅, 새 공지 등)를 실시간으로 받아야 하는 화면(채팅방 등)은 화면이 보여질 때
-   `mainFrame.getConnection().setPushListener(packet -> ...)`으로 자기 자신을 등록한다. 화면
-   전환 시점마다 리스너가 바뀌는 셈이므로, 화면이 사라질 때 리스너를 다시 해제할 필요는 없고
-   다음 화면이 자기 걸로 덮어쓰면 된다.
+`switchTo(name)`은 화면을 보여주기만 하고 데이터는 못 넘긴다. "어떤 게시글을/어떤 채팅방을"
+보여줄지 정해야 하는 화면(`PostDetailPanel`, `ChatRoomPanel` 등)은 `public void open(...)`
+메서드를 갖고 있다. 호출하는 쪽은 항상 이 순서를 지킨다:
 
-`LoginPanel.java` 전체가 위 패턴의 실제 예시다.
+```java
+((PostDetailPanel) mainFrame.getScreen("postDetail")).open(boardKey, post);
+mainFrame.switchTo("postDetail");
+```
 
-## 3. 앞으로 만들어야 할 화면 (회의록 기준 체크리스트)
+## 3. 화면별 구현 상태
 
-- [x] 로그인 (`LoginPanel`)
-- [ ] 회원가입
-- [ ] 게시판 목록/네비게이션 (자유/공동구매/학과/기숙사/공지/민원)
-- [ ] 게시글 목록 (boardKey로 `POST_LIST` 요청)
-- [ ] 게시글 상세 + 댓글
-- [ ] 게시글 작성/수정 (파일/이미지 첨부 포함)
-- [ ] 채팅방 탐색/검색, 가입한 채팅방 목록
-- [ ] 채팅방 화면 (실시간 수신은 `PushListener`로)
-- [ ] 민원 작성 + 문의 내역(답변 대기/완료 표시)
-- [ ] 관리자 화면(게시글 삭제, 문의 답변, 회원정보 수정, 공지 작성)
-- [ ] 추천 3종 탭 (할거/메뉴/책 — `client/recomment_system/*` 사용)
+각 클래스는 `LoginPanel`과 같은 형태다: `JPanel` 상속, 생성자는 `MainFrame`을 받아 필드로 저장,
+버튼 등 액션 리스너는 생성자에서 연결, 실제 배치는 `initLayout()`(항상 TODO — 자유 영역).
+서버에 보내는 요청 자체(어떤 `RequestType`/DTO를 쓰는지)는 이미 구현되어 있는 경우가 많고,
+"응답을 화면에 어떻게 반영할지"(목록 렌더링, 상세 채우기 등)만 TODO로 남아있다.
+
+| 화면 이름(`switchTo` 키) | 클래스 | 남은 TODO |
+|---|---|---|
+| `login` | `LoginPanel` | `initLayout`, 로그인 성공 후 `setCurrentUser`+화면전환 |
+| `register` | `RegisterPanel` | `initLayout`, 가입 성공 후 화면전환 |
+| `home` | `HomePanel` | `initLayout`, 각 버튼이 여는 화면 |
+| `postList` | `PostListPanel` | `initLayout`, 목록 렌더링, `openEditor()` |
+| `postDetail` | `PostDetailPanel` | `initLayout`, 렌더링, 댓글 삭제 버튼 연결 |
+| `postEditor` | `PostEditorPanel` | `initLayout`, `generateId()`(id 채번 규칙 미정) |
+| `groupBuyPostEditor` | `GroupBuyPostEditorPanel` | `initLayout`, `generateId()`, 채팅방 자동 생성 연동 |
+| `noticePostEditor` | `NoticePostEditorPanel` | `initLayout`, `generateId()` |
+| `complaint` | `ComplaintPanel` | `initLayout`, `generateId()`, `openMyComplaints()` |
+| `chatRoomList` | `ChatRoomListPanel` | `initLayout`, `renderRooms()` |
+| `chatRoomCreate` | `ChatRoomCreatePanel` | `initLayout`, 생성 성공 후 화면전환 |
+| `chatRoom` | `ChatRoomPanel` | `initLayout`, `renderMessages()`, `onPush()` 반영, 승인/거절 버튼 연결 |
+| `userEdit` | `UserEditPanel` | `initLayout`, `search()`(학번으로 유저 1명 조회하는 RequestType이 아직 없음) |
+| `admin` | `AdminPanel` | `initLayout`, `openWriteNotice()`, `openComplaintInbox()` |
+| `recommend` | `RecommendPanel` | `initLayout`(탭 구성) |
+
+서버 요청을 만드는 부분의 실제 예시는 `LoginPanel.attemptLogin()`, `PostListPanel.open()`,
+`ChatRoomListPanel.refresh()`를 참고할 것. 서버 푸시(새 채팅 등)를 받는 화면(`ChatRoomPanel`)은
+`PushListener`를 직접 구현하고 `open()`에서 `mainFrame.getConnection().setPushListener(this)`로
+등록한다 — 콜백은 네트워크 스레드에서 호출되므로 화면 갱신은 `SwingUtilities.invokeLater`로
+감싸야 한다(이미 코드 주석으로 남겨둠).
 
 ## 4. 추천 기능 연동
 

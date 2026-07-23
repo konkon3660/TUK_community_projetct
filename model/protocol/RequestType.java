@@ -51,6 +51,9 @@ public enum RequestType {
     /** 요청 payload: {@link model.protocol.ChatSendRequest}. 응답 payload: 없음(전송 성공 여부만) */
     CHAT_SEND,
 
+    /** 요청 payload: 없음. 응답 payload: {@code List<model.ChatRoom>}(전체 채팅방 목록) */
+    CHATROOM_LIST,
+
     /** 서버 전용 푸시(요청 없음). payload: {@link model.protocol.ChatPushPayload}(roomId + 새 Chat) */
     CHAT_MESSAGE_PUSH,
 

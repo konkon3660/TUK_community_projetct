@@ -38,7 +38,8 @@ public class LoginPanel extends JPanel {
         Packet request = Packet.request(RequestType.LOGIN, new LoginRequest(id, password));
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
-            // TODO: 로그인 성공 후 보여줄 화면으로 전환, 예: mainFrame.switchTo("boardList")
+            // TODO: 구현 필요. 예: mainFrame.setCurrentUser((User) response.getPayload());
+            //       mainFrame.switchTo("home");
         } else {
             JOptionPane.showMessageDialog(this, response.getErrorMessage(), "로그인 실패", JOptionPane.ERROR_MESSAGE);
         }

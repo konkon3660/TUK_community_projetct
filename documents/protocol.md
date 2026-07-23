@@ -50,6 +50,7 @@
 | `CHATROOM_JOIN_APPROVE` | `ChatRoomJoinDecision` | 없음 | 방장 전용 |
 | `CHATROOM_JOIN_REJECT` | `ChatRoomJoinDecision` | 없음 | 방장 전용 |
 | `CHAT_SEND` | `ChatSendRequest` | 없음 | |
+| `CHATROOM_LIST` | 없음 | `List<model.ChatRoom>` | 조회 전용 — synchronized 안 함. GUI의 채팅방 탐색/검색 화면에서 사용 |
 | `CHAT_MESSAGE_PUSH` | — | `ChatPushPayload` | 서버 전용 푸시 |
 | `NOTICE_PUSH` | — | `model.boards.NoticePost` | 서버 전용 푸시 |
 | `DISCONNECT` | 없음 | 없음 | 연결 종료 통지 |
@@ -93,9 +94,10 @@
 
 ## 6. 남은 작업
 
-* `server/CT/ClientHandler.java`의 `handleXxx` 메서드 15개 — 전부 `TODO: 구현 필요` 상태.
-  `dataStore` 필드(`server/board/DataStore`)로 게시판/유저/채팅방을 찾고, `model.User`,
-  `model.boards.*`, `model.ChatRoom`의 기존 메서드를 그대로 호출해서 채우면 됨.
+* `server/CT/ClientHandler.java`의 `handleXxx` 메서드 16개(`CHATROOM_LIST` 추가로 15→16) —
+  전부 `TODO: 구현 필요` 상태. `dataStore` 필드(`server/board/DataStore`)로 게시판/유저/채팅방을
+  찾고, `model.User`, `model.boards.*`, `model.ChatRoom`의 기존 메서드를 그대로 호출해서 채우면 됨.
+  `handleChatRoomList`는 `dataStore.getAllChatRooms()`를 그대로 반환하면 됨.
 * 다른 클라이언트에게 푸시를 뿌리는 로직(`ClientHandler.sendPacket`은 있지만 "다른 클라이언트의
   ClientHandler 인스턴스를 어떻게 찾을지"는 아직 없음 — 접속 중인 ClientHandler 목록을
   관리하는 부분은 이번 스켈레톤 범위 밖).

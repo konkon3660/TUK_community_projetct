@@ -5,8 +5,10 @@ import java.io.UncheckedIOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
@@ -81,6 +83,11 @@ public class DataStore {
         return user;
     }
 
+    /** 회원가입 시 학번 중복 확인용 (getUser는 없으면 예외를 던지므로 검사에 쓰지 않는다). */
+    public boolean hasUser(String userId) {
+        return users.containsKey(userId);
+    }
+
     public void addUser(User user) {
         users.put(user.getId(), user);
         saveUsers();
@@ -97,6 +104,10 @@ public class DataStore {
     public void addChatRoom(ChatRoom room) {
         chatRooms.put(room.getRoomId(), room);
         saveChatRoom(room);
+    }
+
+    public List<ChatRoom> getAllChatRooms() {
+        return new ArrayList<>(chatRooms.values());
     }
 
     public void saveChatRoom(ChatRoom room) {
