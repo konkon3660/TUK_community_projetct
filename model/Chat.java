@@ -1,9 +1,12 @@
 package model;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.regex.Pattern;
 
-public class Chat {
+public class Chat implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final String senderId;
     private final LocalDateTime sentAt;
     private final String content;

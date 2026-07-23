@@ -1,9 +1,12 @@
 package model;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.regex.Pattern;
 
-public class Comment {
+public class Comment implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final String authorId;
     private final String content;
     private final LocalDateTime createdAt;

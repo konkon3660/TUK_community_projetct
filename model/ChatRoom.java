@@ -1,5 +1,6 @@
 package model;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -9,7 +10,9 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-public class ChatRoom {
+public class ChatRoom implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final String roomId;
     private final String ownerId;
     private final List<String> memberIds;

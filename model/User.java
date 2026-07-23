@@ -1,8 +1,11 @@
 package model;
 
+import java.io.Serializable;
 import java.util.regex.Pattern;
 
-public class User {
+public class User implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private final String id;
     private String department;
     private boolean dormitory;

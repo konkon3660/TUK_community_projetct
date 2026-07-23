@@ -3,6 +3,8 @@ package model;
 import java.time.LocalDateTime;
 
 public class ComplaintPost extends Post {
+    private static final long serialVersionUID = 1L;
+
     // 필드 순서(0~7은 Post 공통 필드): 8=category1, 9=category2, 10=answered
     private final String category1;
     private final String category2;

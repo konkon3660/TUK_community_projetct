@@ -1,8 +1,10 @@
 package model;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -11,7 +13,9 @@ import java.util.stream.Collectors;
  * 하위 클래스는 baseDataString()/splitFields()/parseComments()를 이용해
  * 공통 필드 + 자신만의 추가 필드를 이어 붙이는 방식으로 toDataString/fromDataString을 구현한다.
  */
-public abstract class Post {
+public abstract class Post implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     protected final String id;
     protected String title;
     protected final String authorId;
@@ -79,6 +83,17 @@ public abstract class Post {
 
     public void addComment(Comment comment) {
         comments.add(comment);
+    }
+
+    /** 삭제 권한(canDelete)을 확인한 뒤 댓글을 제거 */
+    public void removeComment(Comment comment, User requester) {
+        if (!comments.contains(comment)) {
+            throw new NoSuchElementException("댓글을 찾을 수 없음");
+        }
+        if (!comment.canDelete(requester)) {
+            throw new IllegalStateException("삭제 권한 없음: " + requester.getId());
+        }
+        comments.remove(comment);
     }
 
     public LocalDateTime getCreatedAt() {

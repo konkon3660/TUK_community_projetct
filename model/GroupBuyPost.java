@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 public class GroupBuyPost extends Post {
+    private static final long serialVersionUID = 1L;
+
     // 필드 순서(라인 내 토큰 인덱스, 0~7은 Post 공통 필드): 8=maxMembers, 9=chatRoomId, 10=hashtags
     private int maxMembers;
     private String chatRoomId;

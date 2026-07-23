@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 public class NoticePost extends Post {
+    private static final long serialVersionUID = 1L;
+
     // 필드 순서(0~7은 Post 공통 필드): 8=targetDepartments, 9=dormNotice
     private final List<String> targetDepartments; // 비어있으면 전체 공지
     private final boolean dormNotice;
