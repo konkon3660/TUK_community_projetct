@@ -15,7 +15,7 @@ import model.User;
  * 화면 전환 셸. CardLayout으로 화면(JPanel)들을 등록해두고 이름으로 전환한다.
  * ServerConnection을 하나만 만들어서 들고 있고, 모든 화면은 getConnection()으로 공유해서 쓴다.
  * 로그인한 유저도 여기 하나만 들고 있다가 setCurrentUser/getCurrentUser로 공유한다.
- * 새 화면을 추가하는 방법과 open(...) 컨벤션은 documents/gui.md의 LoginPanel 예시를 참고할 것.
+ * 새 화면을 추가하는 방법과 open(...) 컨벤션은 documents/06_gui.md의 LoginPanel 예시를 참고할 것.
  */
 public class MainFrame extends JFrame {
     private static final String SERVER_HOST = "localhost";

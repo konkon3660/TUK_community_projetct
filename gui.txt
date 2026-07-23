@@ -1,0 +1,3483 @@
+╭─── Claude Code v2.1.218 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                Welcome back Junseo!                │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ What's new              │
+│                        ▘▘ ▝▝                       │ Changed `/code-review`… │
+│ Opus 4.8 · Claude Pro · jookpower1022@gmail.com's  │ Added screen-reader an… │
+│ Organization                                       │ Fixed Windows paths wi… │
+│             C:\Projects\Java_summer_p              │ /release-notes for more │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+❯ 이제 서버의 로직을 구현해                                                     
+
+● I'll explore the codebase to understand the current state of the server logic.
+
+  Searched for 3 patterns, read 25 files, listed 1 directory, ran 6 shell commands (ctrl+o to expand)
+
+● I have a clear picture of the codebase. A few decisions before I finalize the
+  plan:
+
+● User answered Claude's questions:
+  ⎿  · 핸들러가 호출해야 하는 model 쪽 
+     TODO(ChatRoom.canJoin/requestJoin/approveJoin/rejectJoin, 
+     NoticePost.isVisibleTo, NoticeBoard.getVisiblePosts)도 함께 구현할까요? → 
+     필요한 model TODO 포함 (권장)
+     · 채팅/공지 푸시를 보내려면 '접속 중인 ClientHandler 목록'이 
+     필요한데(문서상 아직 설계 안 된 부분), 어떻게 할까요? → 세션 레지스트리 
+     신규 추가 (권장)
+     · USER_UPDATE(회원정보 수정) 권한 범위는? → 관리자 전용 (명세 그대로)
+     · 채팅방 가입 신청/승인·거절을 상대방에게 실시간 알릴까요? (지금 
+     프로토콜에는 해당 푸시 타입이 없습니다) → 알림 없음 (권장)
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~\.claude\plans\greedy-beaming-wand.md · /plan to edit
+     서버 업무 로직 구현 계획
+
+     Context
+
+     server/CT/ClientHandler.java의 handleXxx 15개가 전부 throw new 
+     UnsupportedOperationException("TODO: 구현 필요") 상태라, 서버는 켜지고 소켓
+     연결도 되지만 어떤 요청도 처리하지 못한다. 통신 배관(소켓 초기화 순서,
+     Packet 직렬화, requestId 매칭, DATA_LOCK 동기화, 예외→Packet.error 변환)과
+     데이터 계층(DataStore, Board.load/save, toDataString/fromDataString,
+     canEdit/canDelete/canAccess)은 이미 완성되어 있으므로, 이번 작업은 그 
+     사이를 잇는 업무 로직만 채우는 것이다.
+
+     목표: 클라이언트가 로그인 → 게시글 CRUD → 댓글 → 채팅방 생성/가입/채팅까지
+     전 과정을 서버와 실제로 주고받을 수 있는 상태를 만든다.
+
+     추가로 문서상 "아직 설계 안 된 것"으로 남아 있던 접속자 목록(푸시 대상 
+     탐색) 을 이번에 설계·구현한다. ClientHandler.sendPacket()은 있지만 "다른
+     접속자의 ClientHandler를 어떻게 찾을지"가 없어 채팅/공지 푸시가 불가능한
+     상태였다.
+
+     확정된 결정 사항
+
+     - 핸들러가 호출해야 하는 model TODO 6개(ChatRoom 4개,
+     NoticePost.isVisibleTo, NoticeBoard.getVisiblePosts)도 함께 구현한다.
+     - 푸시 대상 탐색은 신규 server/CT/SessionRegistry.java로 해결한다.
+     - USER_UPDATE는 관리자 전용 (protocol.md 명세 그대로).
+     - 채팅방 가입 신청/승인·거절 알림 푸시는 만들지 않는다 → RequestType /
+     protocol.md 변경 없음.
+     - GroupBuyPost.getCurrentMemberCount, GroupBuyBoard.filterByHashtag,
+     ActivityRecommender.recommendNow, client/GUI는 이번 범위 밖.
+
+     ---
+     1. 신규 파일: server/CT/SessionRegistry.java
+
+     접속 중인 로그인 세션(userId → ClientHandler)을 관리하는 서버 전용
+     레지스트리. ServerMain에서 DataStore와 함께 한 개만 만들어 모든
+     ClientHandler 생성자로 넘긴다.
+
+     public class SessionRegistry {
+         private final Map<String, ClientHandler> sessions = new
+     ConcurrentHashMap<>();
+
+         void register(String userId, ClientHandler handler);   // 같은 학번이 
+     다시 로그인하면 새 세션으로 교체
+         void unregister(String userId);                        // 로그아웃 / 
+     연결 종료 시
+         void sendTo(String userId, Packet packet);             // 접속 중이 
+     아니면 조용히 무시
+         void sendToAll(Packet packet, Predicate<User> filter); // 공지 푸시처럼
+     조건부 브로드캐스트
+     }
+
+     - 대상 유저가 접속 중이 아니면 아무 일도 하지 않는다(오프라인은 정상 상황).
+     - sendToAll의 필터는 각 세션의 ClientHandler.getCurrentUser()로 평가한다
+     (이미 있는 getter).
+     - 전송 자체는 기존 ClientHandler.sendPacket()을 그대로 재사용한다 — 새 전송
+     코드를 만들지 않는다(protocol.md 5장).
+
+     2. server/CT/ServerMain.java
+
+     DataStore와 나란히 SessionRegistry를 하나 만들어 new 
+     ClientHandler(clientSocket, dataStore, sessionRegistry)로 넘긴다. 그 외
+     변경 없음.
+
+     3. server/CT/ClientHandler.java — 본 작업
+
+     배관 코드(run, handleRequest, dispatch, sendPacket, SYNCHRONIZED_TYPES,
+     DATA_LOCK)는 수정하지 않는다. 아래만 추가/구현한다.
+
+     3-1. 공통 헬퍼
+
+     - requireLogin() — currentUser == null이면 IllegalStateException("로그인이 
+     필요합니다"). LOGIN/REGISTER 외 모든 핸들러 첫 줄에서 호출.
+     - requireAdmin() — USER_UPDATE용.
+     - boardOf(String boardKey) — dataStore.getBoard(key) +
+     board.canAccess(currentUser) 검사를 묶은 헬퍼(민원·공지 게시판은 예외
+     처리가 달라 각 핸들러에서 분기).
+     - findPost(Board board, String postId) — AbstractBoard.findPost는
+     protected이므로 board.getPosts().stream()...로 찾고 없으면
+     NoSuchElementException.
+     - run()의 finally에 sessionRegistry.unregister(...) 추가 (currentUser가
+     있을 때만).
+
+     예외는 던지기만 하면 된다 — handleRequest가 잡아서 Packet.error(request, 
+     e.getMessage())로 바꿔준다. 메시지는 사용자에게 그대로 노출되므로 한국어로
+     작성한다.
+
+     3-2. 핸들러별 로직
+
+     핸들러: handleLogin
+     로직: payload LoginRequest → dataStore.getUser(id), 비밀번호 불일치 시
+     예외("아이디 또는 비밀번호가 올바르지 않습니다" — 존재 여부를 구분해 알리지
+
+     않음). 성공 시 currentUser 세팅 + sessionRegistry.register. 응답 payload =
+     User
+     ────────────────────────────────────────
+     핸들러: handleRegister
+     로직: payload User. 학번/비밀번호 공백 검사, dataStore.hasUser(id)면 "이미
+     존재하는 학번" 예외. 클라이언트가 보낸 admin=true는 신뢰하지 않고 항상 
+     일반 
+     유저로 새 User를 만들어 dataStore.addUser() (저장까지 포함). 응답 payload
+     없음
+     ────────────────────────────────────────
+     핸들러: handleLogout
+     로직: sessionRegistry.unregister, currentUser = null. 응답 payload 없음
+     ────────────────────────────────────────
+     핸들러: handleUserUpdate
+     로직: requireAdmin(). payload User → 기존 유저를 dataStore.getUser(id)로
+     찾아
+     setDepartment/setDormitory/setPassword로 반영(id/admin은 final이라 변경
+     불가). dataStore.saveUsers()
+     ────────────────────────────────────────
+     핸들러: handlePostList
+     로직: payload String boardKey. 공지: ((NoticeBoard) 
+     board).getVisiblePosts(currentUser). 민원: 관리자면 getPosts(), 아니면
+     getPostsByAuthor(currentUser.getId()). 그 외: canAccess 검사 후 getPosts().
+
+     응답 payload = new ArrayList<>(목록) (원본 리스트를 그대로 직렬화해 보내지
+     않음)
+     ────────────────────────────────────────
+     핸들러: handlePostCreate
+     로직: payload PostCreateOrUpdateRequest. 공지판이면 canWrite 검사, 그 외는
+     canAccess. postId 중복 검사. 작성자 위조 방지: post.getAuthorId()가
+     currentUser.getId()와 다르면 예외. board.addPost(post) → board.save(). 공지
+
+     게시판이면 sessionRegistry.sendToAll(Packet.push(NOTICE_PUSH, post),  u -> 
+     notice.isVisibleTo(u)). 응답 payload = 저장된 Post
+     ────────────────────────────────────────
+     핸들러: handlePostUpdate
+     로직: 서버 보관본을 찾아 canEdit(currentUser) 검사 후, 요청에 담겨 온
+     Post에서
+     수정 가능 필드만 복사(title, content, filePath, imagePath; GroupBuyPost면
+     maxMembers/chatRoomId도). 댓글 목록은 서버 것이 정본이므로 덮어쓰지 않는다.
+
+     board.save()
+     ────────────────────────────────────────
+     핸들러: handlePostDelete
+     로직: payload PostDeleteRequest → board.removePost(postId, currentUser)
+     (권한
+     검사는 AbstractBoard가 이미 수행) → board.save()
+     ────────────────────────────────────────
+     핸들러: handleCommentAdd
+     로직: payload CommentAddRequest. 댓글 작성자 위조 검사 후, 서버 보관본
+     Post에
+     addComment. 대상이 ComplaintPost이고 작성자가 관리자면 markAnswered()도
+     호출(datastruct.md 3.3 규칙). board.save()
+     ────────────────────────────────────────
+     핸들러: handleCommentDelete
+     로직: payload CommentDeleteRequest. 인덱스 범위 검사 후
+     post.removeComment(post.getComments().get(i), currentUser) (권한 검사는
+     Post가 수행) → board.save()
+     ────────────────────────────────────────
+     핸들러: handleChatRoomCreate
+     로직: payload ChatRoom(초기값). roomId는 서버가 채번 — dataStore의 기존 방
+     id
+     중 최대 숫자 + 1을 3자리 zero-pad(001 형식, 기존
+     server/data/chatrooms/00X.dat과 일치). new ChatRoom(newId, 
+     currentUser.getId(), maxMembers)를 만들고 제한 필드(admissionYearLimit,
+     departmentLimit, dormOnlyLimit, inviteBypassesLimit)를 복사, 방장을
+     memberIds에 추가 → dataStore.addChatRoom(room). 응답 payload = 채번된
+     ChatRoom
+     ────────────────────────────────────────
+     핸들러: handleChatRoomJoinRequest
+     로직: payload ChatRoomJoinRequest → room.requestJoin(currentUser, message)
+     →
+     dataStore.saveChatRoom(room)
+     ────────────────────────────────────────
+     핸들러: handleChatRoomJoinApprove
+     로직: payload ChatRoomJoinDecision. 방장(ownerId) 검사 후
+     room.approveJoin(userId) → 저장
+     ────────────────────────────────────────
+     핸들러: handleChatRoomJoinReject
+     로직: 위와 동일하게 방장 검사 후 room.rejectJoin(userId) → 저장
+     ────────────────────────────────────────
+     핸들러: handleChatSend
+     로직: payload ChatSendRequest. 발신자가 memberIds에 있는지 검사 → new 
+     Chat(currentUser.getId(), LocalDateTime.now(), content) →
+     room.sendChat(chat)
+      → dataStore.saveChatRoom(room) → 본인을 제외한 나머지  멤버에게
+     sessionRegistry.sendTo(memberId, Packet.push(CHAT_MESSAGE_PUSH,  new 
+     ChatPushPayload(roomId, chat)))
+     ────────────────────────────────────────
+     핸들러: handleChatRoomList
+     로직: requireLogin() 후 dataStore.getAllChatRooms() 반환 (이미 방어적
+     복사됨)
+
+     4. server/board/DataStore.java
+
+     getUser가 없는 유저에 대해 예외를 던지므로, 회원가입 중복 검사용으로
+     hasUser(String userId) 한 메서드만 추가한다. 나머지는 그대로 사용한다.
+
+     5. model 쪽 TODO 6개
+
+     핸들러가 직접 호출하는 것들이라 함께 구현한다.
+
+     model/ChatRoom.java
+     - canJoin(User) — 이미 멤버면 false / 정원 초과(maxMembers != -1 && 
+     memberIds.size() >= maxMembers)면 false / admissionYearLimit이 있으면 학번
+     앞 4자리 일치 검사 / departmentLimit이 비어있지 않으면 포함 검사 /
+     dormOnlyLimit이면 user.isDormitory(). 학번이 4자리 미만인 비정상 데이터는
+     false로 처리.
+     - requestJoin(User, message) — 이미 멤버거나 canJoin이 false면 사유가 담긴
+     IllegalStateException, 아니면 pendingJoinRequests.put(id, message).
+     - approveJoin(userId) — 대기 목록에 없으면 예외, 정원 재확인 후
+     pendingJoinRequests.remove + memberIds.add.
+     - rejectJoin(userId) — 대기 목록에서 제거(없으면 예외).
+     - inviteBypassesLimit는 초대 기능 자체가 아직 없으므로 이번엔 저장/전달만
+     하고 판정에는 쓰지 않는다(주석으로 명시).
+
+     model/boards/NoticePost.java — isVisibleTo(User)
+     관리자면 항상 true / dormNotice이고 기숙사생이 아니면 false /
+     targetDepartments가 비어있으면 전체 공지라 true, 아니면
+     user.getDepartment() 포함 여부.
+
+     model/boards/NoticeBoard.java — getVisiblePosts(User)
+     posts를 NoticePost로 캐스팅해 isVisibleTo(user)인 것만 모아 반환.
+
+     ---
+     검증 방법
+
+     클라이언트 GUI(MainFrame)는 아직 없는 패널을 참조해 컴파일되지 않으므로,
+     서버 + model + client/CT만 컴파일해서 검증한다.
+
+     # 1) 서버 측 컴파일 (client/GUI 제외)
+     javac -encoding UTF-8 -d out $(find model server client/CT -name "*.java")
+
+     # 2) 서버 실행
+     java -cp out server.CT.ServerMain
+
+     3. 검증용 콘솔 클라이언트를 스크래치패드에 작성해
+     client.CT.ServerConnection으로 실제 시나리오를 돌린다(프로젝트에는 커밋하지
+     않음):
+       - REGISTER 2명(일반/기숙사) → 중복 학번 재시도 시 ERROR 확인
+       - LOGIN 성공/실패(잘못된 비밀번호) 확인
+       - POST_CREATE → POST_LIST → COMMENT_ADD → POST_UPDATE → POST_DELETE
+     (자유게시판)
+       - 기숙사 게시판을 비기숙사생으로 POST_LIST → ERROR 확인 (canAccess)
+       - 관리자 계정으로 공지 작성 → 다른 접속 세션에서 NOTICE_PUSH 수신
+     확인(PushListener)
+       - CHATROOM_CREATE → 다른 유저로 CHATROOM_JOIN_REQUEST → 방장이 APPROVE →
+     CHAT_SEND 시 상대 세션에 CHAT_MESSAGE_PUSH 도착 확인
+       - 서버 재시작 후 POST_LIST/CHATROOM_LIST로 .dat 영속화 확인
+     4. server/data/*.dat 파일을 직접 열어 저장 포맷(|, ,, ^, ;)이
+     documents/datastruct.md와 일치하는지 눈으로 확인.
+
+     ▎ 참고: 현재 server/data/의 모든 파일이 비어 있으므로 첫 실행 시 
+     ▎ 회원가입부터 시작해야 한다.
+
+● I'll implement the plan now, starting with the model TODOs, then the session
+  registry, then the handlers.
+
+● Update(model\ChatRoom.java)
+  ⎿  Added 51 lines, removed 5 lines
+       92          return pendingJoinRequests;
+       93      }
+       94  
+       95 -    /** 입학년도/학과/기숙사 제한 + 정원을 검사해서 가입 가능 
+          -여부를 판단 */                                                
+       95 +    /**                                                       
+       96 +     * 입학년도/학과/기숙사 제한 + 정원을 검사해서 가입 가능  
+          +여부를 판단.                                                  
+       97 +     * inviteBypassesLimit은 초대 기능이 아직 없어서 판정에 쓰
+          +지 않는다 (값 보관만).                                        
+       98 +     */                                                       
+       99      public boolean canJoin(User user) {
+       97 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      100 +        if (memberIds.contains(user.getId())) {               
+      101 +            return false;                                     
+      102 +        }                                                     
+      103 +        if (isFull()) {                                       
+      104 +            return false;                                     
+      105 +        }                                                     
+      106 +        if (admissionYearLimit != null && !matchesAdmissionYea
+          +r(user.getId())) {                                            
+      107 +            return false;                                     
+      108 +        }                                                     
+      109 +        if (!departmentLimit.isEmpty() && !departmentLimit.con
+          +tains(user.getDepartment())) {                                
+      110 +            return false;                                     
+      111 +        }                                                     
+      112 +        return !dormOnlyLimit || user.isDormitory();          
+      113      }
+      114  
+      115      /** 가입지원 메세지와 함께 신청을 등록 (방장이 approveJoin
+           /rejectJoin으로 처리) */
+      116      public void requestJoin(User user, String applicationMessa
+           ge) {
+      102 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      117 +        if (memberIds.contains(user.getId())) {               
+      118 +            throw new IllegalStateException("이미 참여 중인 채
+          +팅방입니다: " + roomId);                                      
+      119 +        }                                                     
+      120 +        if (!canJoin(user)) {                                 
+      121 +            throw new IllegalStateException("가입 조건을 만족 
+          +하지 않습니다: " + roomId);                                   
+      122 +        }                                                     
+      123 +        pendingJoinRequests.put(user.getId(), applicationMessa
+          +ge);                                                          
+      124      }
+      125  
+      126      public void approveJoin(String userId) {
+      106 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      127 +        if (!pendingJoinRequests.containsKey(userId)) {       
+      128 +            throw new NoSuchElementException("가입 신청 내역이
+          + 없습니다: " + userId);                                       
+      129 +        }                                                     
+      130 +        if (isFull()) {                                       
+      131 +            throw new IllegalStateException("정원이 가득 찼습 
+          +니다: " + roomId);                                            
+      132 +        }                                                     
+      133 +        pendingJoinRequests.remove(userId);                   
+      134 +        memberIds.add(userId);                                
+      135      }
+      136  
+      137      public void rejectJoin(String userId) {
+      110 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      138 +        if (pendingJoinRequests.remove(userId) == null) {     
+      139 +            throw new NoSuchElementException("가입 신청 내역이
+          + 없습니다: " + userId);                                       
+      140 +        }                                                     
+      141      }
+      142  
+      143 +    private boolean isFull() {                                
+      144 +        return maxMembers != -1 && memberIds.size() >= maxMemb
+          +ers;                                                          
+      145 +    }                                                         
+      146 +                                                              
+      147 +    /** 학번 앞 4자리(입학년도)가 제한값과 같은지. 학번이 비정
+          +상이면 가입 불가로 본다. */                                   
+      148 +    private boolean matchesAdmissionYear(String userId) {     
+      149 +        if (userId.length() < 4) {                            
+      150 +            return false;                                     
+      151 +        }                                                     
+      152 +        try {                                                 
+      153 +            return Integer.parseInt(userId.substring(0, 4)) ==
+          + admissionYearLimit;                                          
+      154 +        } catch (NumberFormatException e) {                   
+      155 +            return false;                                     
+      156 +        }                                                     
+      157 +    }                                                         
+      158 +                                                              
+      159      public void setNickname(String userId, String nickname) {
+      160          nicknames.put(userId, nickname);
+      161      }
+
+● Update(model\ChatRoom.java)
+  ⎿  Added 1 line
+       7  import java.util.LinkedHashMap;
+       8  import java.util.List;
+       9  import java.util.Map;
+      10 +import java.util.NoSuchElementException;                       
+      11  import java.util.regex.Pattern;
+      12  import java.util.stream.Collectors;
+      13  
+
+● Update(model\boards\NoticePost.java)
+  ⎿  Added 8 lines, removed 1 line
+      34  
+      35      /** 대상 학과/기숙사 지정에 따라 이 유저에게 보여야 하는 공
+          지인지 판단 */
+      36      public boolean isVisibleTo(User user) {
+      37 -        throw new UnsupportedOperationException("TODO: 구현 필 
+         -요");                                                          
+      37 +        if (user.isAdmin()) {                                  
+      38 +            return true;                                       
+      39 +        }                                                      
+      40 +        if (dormNotice && !user.isDormitory()) {               
+      41 +            return false;                                      
+      42 +        }                                                      
+      43 +        // 대상 학과가 비어있으면 전체 공지                    
+      44 +        return targetDepartments.isEmpty() || targetDepartments
+         +.contains(user.getDepartment());                               
+      45      }
+      46  
+      47      @Override
+
+● Update(model\boards\NoticeBoard.java)
+  ⎿  Added 3 lines, removed 1 line
+      24  
+      25      /** 이 유저의 학과/기숙사 여부에 맞는 공지만 필터링해서 반
+          환 */
+      26      public List<Post> getVisiblePosts(User user) {
+      27 -        throw new UnsupportedOperationException("TODO: 구현 필 
+         -요");                                                          
+      27 +        return posts.stream()                                  
+      28 +                .filter(p -> ((NoticePost) p).isVisibleTo(user)
+         +)                                                              
+      29 +                .collect(Collectors.toList());                 
+      30      }
+      31  
+      32      @Override
+
+● Update(model\boards\NoticeBoard.java)
+  ⎿  Added 1 line
+      1  package model.boards;
+      2  
+      3  import java.util.List;
+      4 +import java.util.stream.Collectors;                             
+      5  
+      6  import model.User;
+      7  
+
+● Now the session registry and DataStore.hasUser:
+
+● Write(server\CT\SessionRegistry.java)
+  ⎿  Wrote 46 lines to server\CT\SessionRegistry.java
+       1 package server.CT;
+       2 
+       3 import java.util.Map;
+       4 import java.util.concurrent.ConcurrentHashMap;
+       5 import java.util.function.Predicate;
+       6 
+       7 import model.User;
+       8 import model.protocol.Packet;
+       9 
+      10 /**
+     … +44 lines (ctrl+o to expand)
+● Update(server\board\DataStore.java)
+  ⎿  Added 5 lines
+      83          return user;
+      84      }
+      85  
+      86 +    /** 회원가입 시 학번 중복 확인용 (getUser는 없으면 예외를  
+         +던지므로 검사에 쓰지 않는다). */                               
+      87 +    public boolean hasUser(String userId) {                    
+      88 +        return users.containsKey(userId);                      
+      89 +    }                                                          
+      90 +                                                               
+      91      public void addUser(User user) {
+      92          users.put(user.getId(), user);
+      93          saveUsers();
+
+● Update(server\CT\ServerMain.java)
+  ⎿  Added 2 lines, removed 1 line
+      11  
+      12      public static void main(String[] args) throws IOException {
+      13          DataStore dataStore = new DataStore();
+      14 +        SessionRegistry sessionRegistry = new SessionRegistry()
+         +;                                                              
+      15          try (ServerSocket serverSocket = new ServerSocket(PORT)
+          ) {
+      16              System.out.println("서버 시작: 포트 " + PORT);
+      17              while (true) {
+      18                  Socket clientSocket = serverSocket.accept();
+      19                  System.out.println("클라이언트 연결: " + client
+          Socket.getRemoteSocketAddress());
+      19 -                new Thread(new ClientHandler(clientSocket, data
+         -Store)).start();                                               
+      20 +                new Thread(new ClientHandler(clientSocket, data
+         +Store, sessionRegistry)).start();                              
+      21              }
+      22          }
+      23      }
+
+● Now the main work — ClientHandler:
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 24 lines
+       4  import java.io.ObjectInputStream;
+       5  import java.io.ObjectOutputStream;
+       6  import java.net.Socket;
+       7 +import java.time.LocalDateTime;                                
+       8 +import java.util.ArrayList;                                    
+       9  import java.util.EnumSet;
+      10 +import java.util.List;                                         
+      11 +import java.util.NoSuchElementException;                       
+      12  import java.util.Set;
+      13  
+      14 +import model.Chat;                                             
+      15 +import model.ChatRoom;                                         
+      16  import model.User;
+      17 +import model.boards.Board;                                     
+      18 +import model.boards.Comment;                                   
+      19 +import model.boards.ComplaintBoard;                            
+      20 +import model.boards.ComplaintPost;                             
+      21 +import model.boards.GroupBuyPost;                              
+      22 +import model.boards.NoticeBoard;                               
+      23 +import model.boards.NoticePost;                                
+      24 +import model.boards.Post;                                      
+      25 +import model.protocol.BoardKey;                                
+      26 +import model.protocol.ChatPushPayload;                         
+      27 +import model.protocol.ChatRoomJoinDecision;                    
+      28 +import model.protocol.ChatRoomJoinRequest;                     
+      29 +import model.protocol.ChatSendRequest;                         
+      30 +import model.protocol.CommentAddRequest;                       
+      31 +import model.protocol.CommentDeleteRequest;                    
+      32 +import model.protocol.LoginRequest;                            
+      33  import model.protocol.Packet;
+      34 +import model.protocol.PostCreateOrUpdateRequest;               
+      35 +import model.protocol.PostDeleteRequest;                       
+      36  import model.protocol.RequestType;
+      37  import server.board.DataStore;
+      38  
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 4 lines, removed 2 lines
+      54  
+      55      private final Socket socket;
+      56      private final DataStore dataStore;
+      57 +    private final SessionRegistry sessionRegistry;             
+      58      private ObjectOutputStream out;
+      59      private ObjectInputStream in;
+      59 -    private User currentUser; // 로그인 성공 시 세팅 (세팅하는 
+         -로직은 handleLogin의 TODO)                                     
+      60 +    private volatile User currentUser; // 로그인 성공 시 세팅 (
+         +푸시 스레드가 읽으므로 volatile)                               
+      61  
+      61 -    public ClientHandler(Socket socket, DataStore dataStore) { 
+      62 +    public ClientHandler(Socket socket, DataStore dataStore, Se
+         +ssionRegistry sessionRegistry) {                               
+      63          this.socket = socket;
+      64          this.dataStore = dataStore;
+      65 +        this.sessionRegistry = sessionRegistry;                
+      66      }
+      67  
+      68      public User getCurrentUser() {
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 1 line
+      87          } catch (IOException | ClassNotFoundException e) {
+      88              // 연결이 끊긴 경우 정상 종료로 취급
+      89          } finally {
+      90 +            clearSession();                                    
+      91              closeQuietly();
+      92          }
+      93      }
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 254 lines, removed 20 lines
+      168          }
+      169      }
+      170  
+      171 -    // ── 아래는 실제 업무 로직 자리 (TODO: 구현 필요) ───────
+          -──────────────────                                            
+      172 -    // model/ 패키지의 User/Board/Post/ChatRoom 메서드를 그대 
+          -로 호출해서 채우면 된다.                                      
+      173 -    // 로그인한 유저를 찾거나 게시판 인스턴스를 찾는 레지스트 
+          -리는 이번 범위 밖이므로                                       
+      174 -    // 별도로 설계된 뒤 연결한다.                             
+      171 +    // ── 아래는 실제 업무 로직 ──────────────────────────────
+          +──────────────────                                            
+      172 +    // 검증에 실패하면 예외를 그냥 던지면 된다 — handleRequest
+          +가 잡아서                                                     
+      173 +    // Packet.error(request, 메시지)로 바꿔 보낸다. 메시지는  
+          +사용자에게 그대로 보이므로 한국어로 쓴다.                     
+      174  
+      175      private Packet handleLogin(Packet request) {
+      177 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      176 +        LoginRequest loginRequest = (LoginRequest) request.get
+          +Payload();                                                    
+      177 +        User user;                                            
+      178 +        try {                                                 
+      179 +            user = dataStore.getUser(loginRequest.getId());   
+      180 +        } catch (NoSuchElementException e) {                  
+      181 +            // 존재하지 않는 학번인지 비밀번호가 틀린 건지 구 
+          +분해서 알려주지 않는다.                                       
+      182 +            throw new IllegalStateException("아이디 또는 비밀 
+          +번호가 올바르지 않습니다");                                   
+      183 +        }                                                     
+      184 +        if (!user.getPassword().equals(loginRequest.getPasswor
+          +d())) {                                                       
+      185 +            throw new IllegalStateException("아이디 또는 비밀 
+          +번호가 올바르지 않습니다");                                   
+      186 +        }                                                     
+      187 +        currentUser = user;                                   
+      188 +        sessionRegistry.register(user.getId(), this);         
+      189 +        return Packet.success(request, user);                 
+      190      }
+      191  
+      192      private Packet handleRegister(Packet request) {
+      181 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      193 +        User newUser = (User) request.getPayload();           
+      194 +        if (isBlank(newUser.getId()) || isBlank(newUser.getPas
+          +sword())) {                                                   
+      195 +            throw new IllegalArgumentException("학번과 비밀번 
+          +호는 필수입니다");                                            
+      196 +        }                                                     
+      197 +        if (isBlank(newUser.getDepartment())) {               
+      198 +            throw new IllegalArgumentException("학과는 필수입 
+          +니다");                                                       
+      199 +        }                                                     
+      200 +        if (dataStore.hasUser(newUser.getId())) {             
+      201 +            throw new IllegalStateException("이미 존재하는 학 
+          +번입니다: " + newUser.getId());                               
+      202 +        }                                                     
+      203 +        // 관리자 여부는 클라이언트가 보낸 값을 믿지 않는다 ( 
+          +가입은 항상 일반 유저).                                       
+      204 +        dataStore.addUser(new User(newUser.getId(), newUser.ge
+          +tDepartment(),                                                
+      205 +                newUser.isDormitory(), newUser.getPassword(), 
+          +false));                                                      
+      206 +        return Packet.success(request, null);                 
+      207      }
+      208  
+      209      private Packet handleLogout(Packet request) {
+      185 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      210 +        clearSession();                                       
+      211 +        return Packet.success(request, null);                 
+      212      }
+      213  
+      214      private Packet handleUserUpdate(Packet request) {
+      189 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      215 +        requireAdmin();                                       
+      216 +        User updated = (User) request.getPayload();           
+      217 +        User stored = dataStore.getUser(updated.getId()); //  
+          +없으면 예외                                                   
+      218 +        // id와 admin은 final이라 바꿀 수 없다 — 나머지 세 항 
+          +목만 반영한다.                                                
+      219 +        stored.setDepartment(updated.getDepartment());        
+      220 +        stored.setDormitory(updated.isDormitory());           
+      221 +        stored.setPassword(updated.getPassword());            
+      222 +        dataStore.saveUsers();                                
+      223 +        return Packet.success(request, null);                 
+      224      }
+      225  
+      226      private Packet handlePostList(Packet request) {
+      193 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      227 +        requireLogin();                                       
+      228 +        String boardKey = (String) request.getPayload();      
+      229 +        Board board = dataStore.getBoard(boardKey);           
+      230 +        List<Post> visible;                                   
+      231 +        if (board instanceof NoticeBoard) {                   
+      232 +            // 공지는 전체 열람 가능하지만 대상 학과/기숙사에 
+          +맞는 것만 보여준다.                                           
+      233 +            visible = ((NoticeBoard) board).getVisiblePosts(cu
+          +rrentUser);                                                   
+      234 +        } else if (board instanceof ComplaintBoard && !current
+          +User.isAdmin()) {                                             
+      235 +            // 일반 유저는 "문의 내역" — 본인이 넣은 민원만.  
+      236 +            visible = ((ComplaintBoard) board).getPostsByAutho
+          +r(currentUser.getId());                                       
+      237 +        } else {                                              
+      238 +            requireAccess(board, boardKey);                   
+      239 +            visible = board.getPosts();                       
+      240 +        }                                                     
+      241 +        // 서버가 들고 있는 리스트를 그대로 넘기면 다른 스레드
+          +가 수정하는 중에 직렬화될 수 있다.                            
+      242 +        return Packet.success(request, new ArrayList<>(visible
+          +));                                                           
+      243      }
+      244  
+      245      private Packet handlePostCreate(Packet request) {
+      197 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      246 +        requireLogin();                                       
+      247 +        PostCreateOrUpdateRequest payload = (PostCreateOrUpdat
+          +eRequest) request.getPayload();                               
+      248 +        String boardKey = payload.getBoardKey();              
+      249 +        Board board = dataStore.getBoard(boardKey);           
+      250 +        Post post = payload.getPost();                        
+      251 +                                                              
+      252 +        if (board instanceof NoticeBoard) {                   
+      253 +            if (!((NoticeBoard) board).canWrite(currentUser)) 
+          +{                                                             
+      254 +                throw new IllegalStateException("공지는 관리자
+          +만 작성할 수 있습니다");                                      
+      255 +            }                                                 
+      256 +        } else {                                              
+      257 +            requireAccess(board, boardKey);                   
+      258 +        }                                                     
+      259 +        if (isBlank(post.getId())) {                          
+      260 +            throw new IllegalArgumentException("게시글 id가 비
+          +어 있습니다");                                                
+      261 +        }                                                     
+      262 +        if (!post.getAuthorId().equals(currentUser.getId())) {
+      263 +            throw new IllegalStateException("다른 사람 명의로 
+          +글을 쓸 수 없습니다");                                        
+      264 +        }                                                     
+      265 +        if (board.getPosts().stream().anyMatch(p -> p.getId().
+          +equals(post.getId()))) {                                      
+      266 +            throw new IllegalStateException("이미 존재하는 게 
+          +시글 id입니다: " + post.getId());                             
+      267 +        }                                                     
+      268 +                                                              
+      269 +        board.addPost(post);                                  
+      270 +        board.save();                                         
+      271 +                                                              
+      272 +        if (post instanceof NoticePost) {                     
+      273 +            NoticePost notice = (NoticePost) post;            
+      274 +            sessionRegistry.sendToAll(Packet.push(RequestType.
+          +NOTICE_PUSH, notice), notice::isVisibleTo);                   
+      275 +        }                                                     
+      276 +        return Packet.success(request, post);                 
+      277      }
+      278  
+      279      private Packet handlePostUpdate(Packet request) {
+      201 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      280 +        requireLogin();                                       
+      281 +        PostCreateOrUpdateRequest payload = (PostCreateOrUpdat
+          +eRequest) request.getPayload();                               
+      282 +        Board board = dataStore.getBoard(payload.getBoardKey()
+          +);                                                            
+      283 +        Post incoming = payload.getPost();                    
+      284 +        Post stored = findPost(board, incoming.getId());      
+      285 +        if (!stored.canEdit(currentUser)) {                   
+      286 +            throw new IllegalStateException("수정 권한이 없습 
+          +니다: " + currentUser.getId());                               
+      287 +        }                                                     
+      288 +        // 댓글 목록은 서버 것이 정본이므로 통째로 갈아끼우지 
+          +않고 수정 가능한 필드만 옮긴다.                               
+      289 +        stored.setTitle(incoming.getTitle());                 
+      290 +        stored.setContent(incoming.getContent());             
+      291 +        stored.setFilePath(incoming.getFilePath());           
+      292 +        stored.setImagePath(incoming.getImagePath());         
+      293 +        if (stored instanceof GroupBuyPost && incoming instanc
+          +eof GroupBuyPost) {                                           
+      294 +            GroupBuyPost storedGroupBuy = (GroupBuyPost) store
+          +d;                                                            
+      295 +            GroupBuyPost incomingGroupBuy = (GroupBuyPost) inc
+          +oming;                                                        
+      296 +            storedGroupBuy.setMaxMembers(incomingGroupBuy.getM
+          +axMembers());                                                 
+      297 +            storedGroupBuy.setChatRoomId(incomingGroupBuy.getC
+          +hatRoomId());                                                 
+      298 +        }                                                     
+      299 +        board.save();                                         
+      300 +        return Packet.success(request, null);                 
+      301      }
+      302  
+      303      private Packet handlePostDelete(Packet request) {
+      205 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      304 +        requireLogin();                                       
+      305 +        PostDeleteRequest payload = (PostDeleteRequest) reques
+          +t.getPayload();                                               
+      306 +        Board board = dataStore.getBoard(payload.getBoardKey()
+          +);                                                            
+      307 +        board.removePost(payload.getPostId(), currentUser); //
+          + 권한 검사는 AbstractBoard가 수행                             
+      308 +        board.save();                                         
+      309 +        return Packet.success(request, null);                 
+      310      }
+      311  
+      312      private Packet handleCommentAdd(Packet request) {
+      209 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      313 +        requireLogin();                                       
+      314 +        CommentAddRequest payload = (CommentAddRequest) reques
+          +t.getPayload();                                               
+      315 +        Board board = dataStore.getBoard(payload.getBoardKey()
+          +);                                                            
+      316 +        Post post = findPost(board, payload.getPostId());     
+      317 +        Comment comment = payload.getComment();               
+      318 +        if (!comment.getAuthorId().equals(currentUser.getId())
+          +) {                                                           
+      319 +            throw new IllegalStateException("다른 사람 명의로 
+          +댓글을 쓸 수 없습니다");                                      
+      320 +        }                                                     
+      321 +        post.addComment(comment);                             
+      322 +        // 관리자가 민원에 단 댓글 = 답변이므로 상태도 함께 바
+          +꾼다 (datastruct.md 3.3).                                     
+      323 +        if (post instanceof ComplaintPost && currentUser.isAdm
+          +in()) {                                                       
+      324 +            ((ComplaintPost) post).markAnswered();            
+      325 +        }                                                     
+      326 +        board.save();                                         
+      327 +        return Packet.success(request, null);                 
+      328      }
+      329  
+      330      private Packet handleCommentDelete(Packet request) {
+      213 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      331 +        requireLogin();                                       
+      332 +        CommentDeleteRequest payload = (CommentDeleteRequest) 
+          +request.getPayload();                                         
+      333 +        Board board = dataStore.getBoard(payload.getBoardKey()
+          +);                                                            
+      334 +        Post post = findPost(board, payload.getPostId());     
+      335 +        int index = payload.getCommentIndex();                
+      336 +        if (index < 0 || index >= post.getComments().size()) {
+      337 +            throw new NoSuchElementException("댓글을 찾을 수  
+          +없음: " + index);                                             
+      338 +        }                                                     
+      339 +        post.removeComment(post.getComments().get(index), curr
+          +entUser); // 권한 검사는 Post가 수행                          
+      340 +        board.save();                                         
+      341 +        return Packet.success(request, null);                 
+      342      }
+      343  
+      344      private Packet handleChatRoomCreate(Packet request) {
+      217 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      345 +        requireLogin();                                       
+      346 +        ChatRoom template = (ChatRoom) request.getPayload();  
+      347 +        // roomId는 클라이언트가 보낸 값을 쓰지 않고 서버가 채
+          +번한다 (001, 002, ... 형식).                                  
+      348 +        ChatRoom room = new ChatRoom(nextRoomId(), currentUser
+          +.getId(), template.getMaxMembers());                          
+      349 +        room.setAdmissionYearLimit(template.getAdmissionYearLi
+          +mit());                                                       
+      350 +        room.getDepartmentLimit().addAll(template.getDepartmen
+          +tLimit());                                                    
+      351 +        room.setDormOnlyLimit(template.isDormOnlyLimit());    
+      352 +        room.setInviteBypassesLimit(template.isInviteBypassesL
+          +imit());                                                      
+      353 +        room.getMemberIds().add(currentUser.getId()); // 방장 
+          +은 바로 참여자                                                
+      354 +        dataStore.addChatRoom(room);                          
+      355 +        return Packet.success(request, room);                 
+      356      }
+      357  
+      358      private Packet handleChatRoomJoinRequest(Packet request) {
+      221 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      359 +        requireLogin();                                       
+      360 +        ChatRoomJoinRequest payload = (ChatRoomJoinRequest) re
+          +quest.getPayload();                                           
+      361 +        ChatRoom room = dataStore.getChatRoom(payload.getRoomI
+          +d());                                                         
+      362 +        room.requestJoin(currentUser, payload.getMessage());  
+      363 +        dataStore.saveChatRoom(room);                         
+      364 +        return Packet.success(request, null);                 
+      365      }
+      366  
+      367      private Packet handleChatRoomJoinApprove(Packet request) {
+      225 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      368 +        requireLogin();                                       
+      369 +        ChatRoomJoinDecision payload = (ChatRoomJoinDecision) 
+          +request.getPayload();                                         
+      370 +        ChatRoom room = requireOwnedRoom(payload.getRoomId());
+      371 +        room.approveJoin(payload.getUserId());                
+      372 +        dataStore.saveChatRoom(room);                         
+      373 +        return Packet.success(request, null);                 
+      374      }
+      375  
+      376      private Packet handleChatRoomJoinReject(Packet request) {
+      229 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      377 +        requireLogin();                                       
+      378 +        ChatRoomJoinDecision payload = (ChatRoomJoinDecision) 
+          +request.getPayload();                                         
+      379 +        ChatRoom room = requireOwnedRoom(payload.getRoomId());
+      380 +        room.rejectJoin(payload.getUserId());                 
+      381 +        dataStore.saveChatRoom(room);                         
+      382 +        return Packet.success(request, null);                 
+      383      }
+      384  
+      385      private Packet handleChatSend(Packet request) {
+      233 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      386 +        requireLogin();                                       
+      387 +        ChatSendRequest payload = (ChatSendRequest) request.ge
+          +tPayload();                                                   
+      388 +        ChatRoom room = dataStore.getChatRoom(payload.getRoomI
+          +d());                                                         
+      389 +        if (!room.getMemberIds().contains(currentUser.getId())
+          +) {                                                           
+      390 +            throw new IllegalStateException("참여 중이 아닌 채
+          +팅방입니다: " + room.getRoomId());                            
+      391 +        }                                                     
+      392 +        Chat chat = new Chat(currentUser.getId(), LocalDateTim
+          +e.now(), payload.getContent());                               
+      393 +        room.sendChat(chat);                                  
+      394 +        dataStore.saveChatRoom(room);                         
+      395 +                                                              
+      396 +        Packet pushPacket = Packet.push(RequestType.CHAT_MESSA
+          +GE_PUSH,                                                      
+      397 +                new ChatPushPayload(room.getRoomId(), chat)); 
+      398 +        for (String memberId : room.getMemberIds()) {         
+      399 +            if (!memberId.equals(currentUser.getId())) { // 보
+          +낸 사람은 응답으로 이미 안다                                  
+      400 +                sessionRegistry.sendTo(memberId, pushPacket); 
+      401 +            }                                                 
+      402 +        }                                                     
+      403 +        return Packet.success(request, null);                 
+      404      }
+      405  
+      406      private Packet handleChatRoomList(Packet request) {
+      237 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      407 +        requireLogin();                                       
+      408 +        return Packet.success(request, dataStore.getAllChatRoo
+          +ms());                                                        
+      409      }
+      410 +                                                              
+      411 +    // ── 핸들러 공용 헬퍼 ───────────────────────────────────
+          +─────────────────                                             
+      412 +                                                              
+      413 +    private void requireLogin() {                             
+      414 +        if (currentUser == null) {                            
+      415 +            throw new IllegalStateException("로그인이 필요합니
+          +다");                                                         
+      416 +        }                                                     
+      417 +    }                                                         
+      418 +                                                              
+      419 +    private void requireAdmin() {                             
+      420 +        requireLogin();                                       
+      421 +        if (!currentUser.isAdmin()) {                         
+      422 +            throw new IllegalStateException("관리자만 사용할  
+          +수 있는 기능입니다");                                         
+      423 +        }                                                     
+      424 +    }                                                         
+      425 +                                                              
+      426 +    private void requireAccess(Board board, String boardKey) {
+      427 +        if (!board.canAccess(currentUser)) {                  
+      428 +            throw new IllegalStateException("접근 권한이 없는 
+          +게시판입니다: " + boardKey);                                  
+      429 +        }                                                     
+      430 +    }                                                         
+      431 +                                                              
+      432 +    /** 방장 전용 동작(가입 승인/거절)에서 사용 */            
+      433 +    private ChatRoom requireOwnedRoom(String roomId) {        
+      434 +        ChatRoom room = dataStore.getChatRoom(roomId);        
+      435 +        if (!room.getOwnerId().equals(currentUser.getId())) { 
+      436 +            throw new IllegalStateException("방장만 사용할 수 
+          +있는 기능입니다: " + roomId);                                 
+      437 +        }                                                     
+      438 +        return room;                                          
+      439 +    }                                                         
+      440 +                                                              
+      441 +    private Post findPost(Board board, String postId) {       
+      442 +        return board.getPosts().stream()                      
+      443 +                .filter(p -> p.getId().equals(postId))        
+      444 +                .findFirst()                                  
+      445 +                .orElseThrow(() -> new NoSuchElementException(
+          +"게시글을 찾을 수 없음: " + postId));                         
+      446 +    }                                                         
+      447 +                                                              
+      448 +    /** 기존 방 id 중 가장 큰 숫자 + 1을 세 자리로 채번 (serve
+          +r/data/chatrooms/001.dat 형식과 동일) */                      
+      449 +    private String nextRoomId() {                             
+      450 +        int max = 0;                                          
+      451 +        for (ChatRoom room : dataStore.getAllChatRooms()) {   
+      452 +            try {                                             
+      453 +                max = Math.max(max, Integer.parseInt(room.getR
+          +oomId()));                                                    
+      454 +            } catch (NumberFormatException ignored) {         
+      455 +                // 숫자가 아닌 id는 채번 대상에서 제외        
+      456 +            }                                                 
+      457 +        }                                                     
+      458 +        return String.format("%03d", max + 1);                
+      459 +    }                                                         
+      460 +                                                              
+      461 +    /** 로그인 세션 해제 (로그아웃 / 연결 종료 공용) */       
+      462 +    private void clearSession() {                             
+      463 +        User user = currentUser;                              
+      464 +        if (user != null) {                                   
+      465 +            sessionRegistry.unregister(user.getId(), this);   
+      466 +            currentUser = null;                               
+      467 +        }                                                     
+      468 +    }                                                         
+      469 +                                                              
+      470 +    private static boolean isBlank(String value) {            
+      471 +        return value == null || value.trim().isEmpty();       
+      472 +    }                                                         
+      473  }
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Removed 1 line
+      22  import model.boards.NoticeBoard;
+      23  import model.boards.NoticePost;
+      24  import model.boards.Post;
+      25 -import model.protocol.BoardKey;                                
+      25  import model.protocol.ChatPushPayload;
+      26  import model.protocol.ChatRoomJoinDecision;
+      27  import model.protocol.ChatRoomJoinRequest;
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Compiles cleanly. Now I'll verify end-to-end with a throwaway console client,
+  running the server in an isolated data directory so the project's .dat files
+  stay untouched.
+
+  Made 3 scratchpad edits +305 -3, ran 4 shell commands (ctrl+o to expand)
+
+● Found a real bug: ComplaintBoard.canAccess is admin-only (it governs reading 
+  the whole complaint box), so my create path was blocking normal users from
+  filing complaints. Fixing:
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 3 lines, removed 1 line
+      252              if (!((NoticeBoard) board).canWrite(currentUser)) 
+           {
+      253                  throw new IllegalStateException("공지는 관리자
+           만 작성할 수 있습니다");
+      254              }
+      255 -        } else {                                              
+      255 +        } else if (!(board instanceof ComplaintBoard)) {      
+      256 +            // 민원은 canAccess가 "전체 민원함 열람" 기준이라 
+          +등록에는 적용하지 않는다                                      
+      257 +            // (누구나 넣을 수 있고, 열람만 본인 것으로 제한된
+          +다).                                                          
+      258              requireAccess(board, boardKey);
+      259          }
+      260          if (isBlank(post.getId())) {
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 5 lines
+      319          if (!comment.getAuthorId().equals(currentUser.getId())
+           ) {
+      320              throw new IllegalStateException("다른 사람 명의로 
+           댓글을 쓸 수 없습니다");
+      321          }
+      322 +        // 민원은 열람 자체가 관리자/작성자 본인으로 제한되므 
+          +로 댓글도 같은 기준으로 막는다.                               
+      323 +        if (board instanceof ComplaintBoard                   
+      324 +                && !currentUser.isAdmin() && !post.getAuthorId
+          +().equals(currentUser.getId())) {                             
+      325 +            throw new IllegalStateException("열람 권한이 없는 
+          +민원입니다: " + post.getId());                                
+      326 +        }                                                     
+      327          post.addComment(comment);
+      328          // 관리자가 민원에 단 댓글 = 답변이므로 상태도 함께 바
+           꾼다 (datastruct.md 3.3).
+      329          if (post instanceof ComplaintPost && currentUser.isAdm
+           in()) {
+
+  Made 1 scratchpad edit +3 -1, ran 3 shell commands (ctrl+o to expand)
+
+● Background command "Start test server in isolated data dir" failed with exit
+code 127
+
+● BOM present — that would corrupt the seeded admin id. Rewriting without BOM:
+
+  Made 1 scratchpad edit +2, ran 2 shell commands (ctrl+o to expand)
+
+● All 75 checks pass. Now verifying persistence across a server restart:
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Background command "Verify no BOM and start test server" failed with exit code
+127
+● Saved format matches documents/datastruct.md. Now restarting the server to
+  check persistence:
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Test server stopped; the project's own server/data/*.dat files are untouched.
+  New GUI panels appeared during the session (not from me) — let me check
+  whether the whole tree now compiles:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Background command "Restart test server" failed with exit code 127
+
+● Full project compiles (exit 0), including the GUI panels. Final review of the
+  handler file:
+
+  Read 1 file (ctrl+o to expand)
+
+● One robustness gap worth closing: each board's .dat format is fixed by its
+  parsePost, so a mismatched post type (e.g. a plain Post written to the notice
+  board) would save fine but crash load() on the next server start. Adding a
+  type guard:
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 1 line
+      257              // (누구나 넣을 수 있고, 열람만 본인 것으로 제한된
+           다).
+      258              requireAccess(board, boardKey);
+      259          }
+      260 +        requirePostType(board, post);                         
+      261          if (isBlank(post.getId())) {
+      262              throw new IllegalArgumentException("게시글 id가 비
+           어 있습니다");
+      263          }
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 19 lines
+      430          }
+      431      }
+      432  
+      433 +    /**                                                       
+      434 +     * 게시판마다 .dat 한 줄의 필드 개수가 정해져 있고(parsePo
+          +st가 그 형식으로만 복원한다),                                 
+      435 +     * 형식이 다른 게시글이 섞여 저장되면 다음 서버 시작 때 lo
+          +ad()가 깨진다. 저장 전에 막는다.                              
+      436 +     */                                                       
+      437 +    private void requirePostType(Board board, Post post) {    
+      438 +        Class<? extends Post> expected = Post.class;          
+      439 +        if (board instanceof NoticeBoard) {                   
+      440 +            expected = NoticePost.class;                      
+      441 +        } else if (board instanceof ComplaintBoard) {         
+      442 +            expected = ComplaintPost.class;                   
+      443 +        } else if (board instanceof GroupBuyBoard) {          
+      444 +            expected = GroupBuyPost.class;                    
+      445 +        }                                                     
+      446 +        if (post.getClass() != expected) {                    
+      447 +            throw new IllegalArgumentException("이 게시판에 맞
+          +지 않는 게시글 형식입니다: "                                  
+      448 +                    + post.getClass().getSimpleName() + " (필 
+          +요: " + expected.getSimpleName() + ")");                      
+      449 +        }                                                     
+      450 +    }                                                         
+      451 +                                                              
+      452      private void requireAccess(Board board, String boardKey) {
+      453          if (!board.canAccess(currentUser)) {
+      454              throw new IllegalStateException("접근 권한이 없는 
+           게시판입니다: " + boardKey);
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 1 line
+      18  import model.boards.Comment;
+      19  import model.boards.ComplaintBoard;
+      20  import model.boards.ComplaintPost;
+      21 +import model.boards.GroupBuyBoard;                             
+      22  import model.boards.GroupBuyPost;
+      23  import model.boards.NoticeBoard;
+      24  import model.boards.NoticePost;
+
+  Made 1 scratchpad edit +10 -3, ran 4 shell commands (ctrl+o to expand)
+
+● 서버 로직 구현을 마쳤습니다.
+
+  구현한 것
+
+  server/CT/ClientHandler.java — handleXxx 15개 전부 구현 (배관 코드는 그대로
+  두고 업무 로직만 채움)
+  - 로그인/가입/로그아웃/회원정보 수정, 게시글 CRUD, 댓글 추가·삭제, 채팅방
+  생성·가입·승인·거절·채팅 전송·목록
+  - 공용 헬퍼: requireLogin, requireAdmin, requireAccess, requirePostType,
+  requireOwnedRoom, findPost, nextRoomId, clearSession
+  - 검증 실패는 예외를 던지기만 하면 기존 handleRequest가 Packet.error로 바꿔
+  보냅니다
+
+  server/CT/SessionRegistry.java (신규) — 문서상 "아직 설계 안 된 것"이던 접속자
+  목록. userId → ClientHandler 맵으로 채팅/공지 푸시 대상을 찾고, 전송은 기존
+  ClientHandler.sendPacket()을 그대로 재사용합니다.
+
+  ServerMain 레지스트리 주입, DataStore.hasUser() 추가(가입 중복 검사용), model 
+  TODO 6개(ChatRoom.canJoin/requestJoin/approveJoin/rejectJoin,
+  NoticePost.isVisibleTo, NoticeBoard.getVisiblePosts) 구현.
+
+  계획에서 조정한 부분 두 가지
+
+  - 민원 등록: ComplaintBoard.canAccess가 관리자 전용이라 처음엔 일반 유저의
+  민원 등록까지 막혔습니다. canAccess는 "전체 민원함 열람" 기준이므로 등록에는
+  적용하지 않고, 대신 댓글에 "관리자 또는 본인 민원만" 검사를 넣었습니다.
+  - 게시글 형식 검사(계획에 없던 추가): 게시판마다 .dat 한 줄의 필드 수가
+  고정이라, 공지판에 일반 Post가 저장되면 다음 서버 시작 시 load()가 깨져 서버가
+  아예 못 뜹니다. 저장 전에 타입을 검사하도록 막았습니다.
+
+  검증
+
+  프로젝트의 server/data/*.dat를 건드리지 않도록 스크래치패드에 별도 데이터
+  트리를 만들어 서버를 띄우고, client.CT.ServerConnection으로 실제 시나리오를
+  돌렸습니다.
+
+  - 77개 전부 통과 — 권한 거부(타 학과/기숙사/관리자/방장/타인 명의), 중복
+  학번·게시글 id, 민원 격리, NOTICE_PUSH가 대상 학과에만 도착,
+  CHAT_MESSAGE_PUSH가 발신자 제외 멤버에게만 도착
+  - 서버 재시작 후 11개 전부 통과 — 공지·민원(답변완료 상태)·채팅방 2개·채팅
+  기록·가입 신청·기숙사 제한 전부 파일에서 복원
+  - 저장된 .dat 내용이 documents/datastruct.md의 구분자 규격(| , ^ ; :)과
+  일치함을 눈으로 확인
+  - 전체 트리 컴파일 통과 (세션 중 추가된 GUI 패널 포함, 에러 0개). 확인용으로
+  만든 out/은 지웠습니다.
+
+  참고로 documents/protocol.md 6장 "남은 작업"에 아직 "handleXxx 15개 전부
+  TODO", "푸시 대상 목록 없음"으로 적혀 있어 지금은 사실과 다릅니다. 문서
+  파일들이 이 세션 중에 다른 곳에서 수정 중인 것 같아 제가 건드리지 않았는데,
+  원하시면 갱신하겠습니다.
+
+✻ Crunched for 12m 51s
+
+● Background command "Start server for final run" failed with exit code 127
+
+● 테스트 서버 종료 알림입니다 — 검증을 마치고 제가 의도적으로 종료한 프로세스라
+  조치할 것은 없습니다. 실행 중인 백그라운드 작업은 이제 없고, 앞선 결과(스모크
+  테스트 77개 + 재시작 영속성 11개 전부 통과)는 종료 전에 모두 받아둔 것입니다.
+
+✻ Brewed for 6s
+
+※ recap: 서버 업무 로직 구현을 완료했습니다. ClientHandler 핸들러 15개, 세션 레지스트리, 관련 model TODO 6개를 구현했고 스모크 테스트 77개와 재시작 영속성 11개가 모두 통과했습니다. 원하시면 protocol.md의 남은 작업 항목을 현재 상태로 갱신하겠습니다. (disable recaps in /config)
+
+❯ 지금 구현된 현황                                                              
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● 현재 상태를 코드에서 직접 확인했습니다 (전체 62개 .java, 전체 컴파일 통과).
+
+  ✅ 완료 — 서버 (server/) : TODO 0개
+
+  ┌─────────────────┬─────────────────────────────────────────────┐
+  │      파일       │                    상태                     │
+  ├─────────────────┼─────────────────────────────────────────────┤
+  │ ServerMain      │ 포트 5000, DataStore + SessionRegistry 주입 │
+  ├─────────────────┼─────────────────────────────────────────────┤
+  │ ClientHandler   │ 핸들러 15개 전부 구현 + 헬퍼 8개            │
+  ├─────────────────┼─────────────────────────────────────────────┤
+  │ SessionRegistry │ 신규. 접속자 목록/푸시 대상 탐색            │
+  ├─────────────────┼─────────────────────────────────────────────┤
+  │ DataStore       │ hasUser() 추가, 나머지는 기존 그대로        │
+  └─────────────────┴─────────────────────────────────────────────┘
+
+  동작 확인된 기능: 로그인·가입·로그아웃·회원정보 수정(관리자), 게시글 CRUD,
+  댓글 추가·삭제, 채팅방 생성(roomId 서버 채번)·가입 신청·승인·거절·채팅
+  전송·목록, NOTICE_PUSH/CHAT_MESSAGE_PUSH 실시간 푸시, 파일 영속화.
+
+  ✅ 완료 — 공통 모델 (model/) : TODO 2개 남음
+
+  ChatRoom(가입 4종), NoticePost.isVisibleTo, NoticeBoard.getVisiblePosts 구현
+  완료.
+
+  남은 2개는 서버가 쓰지 않는 클라이언트 표시용이라 이번 범위에서 제외한
+  것들입니다:
+  - GroupBuyPost.getCurrentMemberCount(ChatRoom) — 연결된 채팅방 인원수 반환
+  - GroupBuyBoard.filterByHashtag(String) — 해시태그 필터
+
+  🔨 남은 작업 — 클라이언트
+
+  ┌──────────────────────────────────┬──────────────────────────────────────┐
+  │               영역               │                 상태                 │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ client/CT (ServerConnection,     │ 완성 (배관)                          │
+  │ PushListener)                    │                                      │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ client/GUI — MainFrame           │ 완성 (화면 전환 셸)                  │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │                                  │ 서버 통신 코드는 이미 채워져 있고,   │
+  │ client/GUI — 패널 15개           │ initLayout()(레이아웃)·렌더링·성공   │
+  │                                  │ 후 화면 전환만 TODO                  │
+  ├──────────────────────────────────┼──────────────────────────────────────┤
+  │ ActivityRecommender.recommendNow │ 공강 판단 규칙 미정 (책·메뉴         │
+  │                                  │ 추천기는 완성)                       │
+  └──────────────────────────────────┴──────────────────────────────────────┘
+
+  아직 정해지지 않은 것
+
+  - 공동구매 글 ↔ 채팅방 연결 시점 — GroupBuyPostEditorPanel에
+  "CHATROOM_CREATE를 먼저 부를지" TODO로 남아 있습니다. 서버는 두 요청을 각각
+  처리할 준비가 되어 있어, 클라이언트가 방을 먼저 만들고 그 roomId를 글에 넣으면
+  됩니다.
+  - 게시글 id 채번 규칙 — 두 에디터 패널의 generateId()가 TODO. 서버는
+  클라이언트가 준 id를 받고 중복만 거부하므로, UUID.randomUUID().toString()
+  정도면 충분합니다.
+  - 특수문자 처리 — 글 내용에 | ^ ;가 들어가면 .dat 저장 형식이 깨집니다
+  (기존부터 있던 이슈, 서버·클라이언트 공통).
+  - server/data/*.dat가 전부 비어 있음 — 관리자 계정이 없어서 공지 작성·민원
+  답변을 테스트하려면 users.dat에 학번|학과|기숙사|비번|true 한 줄을 직접 넣어야
+  합니다 (가입 API는 항상 일반 유저로만 만듭니다).
+  - documents/protocol.md 6장 "남은 작업" 이 아직 "handleXxx 15개 TODO / 푸시
+  대상 목록 없음"으로 되어 있어 실제와 다릅니다.
+
+✻ Baked for 36s
+
+※ recap: 서버 로직 구현은 끝났고 검증까지 통과했습니다. 남은 건 클라이언트 GUI 패널 15개의 레이아웃과 화면 전환이며, 다음으로 할 일은 로그인 화면부터 채우는 것입니다. (disable recaps in /config)
+
+❯ 교수님이 class왜 이렇게 설계했냐고 하던데                                     
+
+● 교수님이 정확히 어느 부분을 짚으셨는지에 따라 답이 달라지는데, 이 코드에서 "왜
+  이렇게?"가 나올 만한 지점은 대체로 정해져 있습니다. 방어 가능한 것과 인정해야
+  할 것을 나눠 정리했습니다.
+
+  1. 방어 가능한 설계 — 근거가 분명한 것
+
+  Board 인터페이스 + AbstractBoard 추상클래스 둘 다 둔 이유
+  계약(무엇을 할 수 있나)과 골격 구현(어떻게 하나)의 분리입니다. 게시판 6종에서
+  "글 추가/삭제/파일 로드·저장"은 완전히 동일하고 다른 건 세 가지뿐이라, 하위
+  클래스는 canAccess/getDataFilePath/parsePost만 채웁니다. 전형적인 템플릿 
+  메서드 패턴이고, List/AbstractList 같은 표준 라이브러리 구조와 같습니다. 6번
+  복붙했다면 버그 하나를 6군데 고쳐야 합니다.
+
+  권한 판단(canEdit/canDelete/canAccess)을 모델에 둔 이유
+  권한 규칙이 데이터에 붙어 있어야 클라이언트(수정 버튼을 켤지)와 서버(요청을
+  받아줄지)가 같은 규칙을 한 곳에서 씁니다. 규칙을 서버에만 두면 클라이언트가
+  규칙을 재구현하게 되고 두 벌이 어긋납니다. 최종 신뢰는 서버가
+  하고(ClientHandler에서 전부 재검증), 클라이언트 쪽 호출은 UI 편의입니다.
+
+  통신은 Serializable, 저장은 toDataString으로 나눈 이유
+  용도가 다릅니다. 소켓은 객체를 그대로 보내는 게 맞지만, 저장 파일은 사람이 
+  열어보고 고칠 수 있어야 하고 클래스 필드가 바뀌어도 기존 파일을 못 읽으면 안
+  됩니다. 자바 기본 직렬화 바이너리는 둘 다 안 됩니다. 대신 구분자는 DataFormat
+  한 곳에만 두어 형식이 클래스마다 갈라지지 않게 했습니다.
+
+  Packet의 생성자를 막고 정적 팩토리 4개만 연 이유
+  "성공인데 에러 메시지가 들어있는 패킷" 같은 잘못된 조합을 컴파일 타임에 원천
+  차단합니다.
+
+  BoardKey는 상수인데 학과는 문자열인 이유
+  게시판 5종은 코드가 아는 고정값이지만, 학과는 늘어나고 바뀌는 데이터입니다.
+  enum으로 만들면 학과 신설 때마다 재컴파일해야 합니다.
+
+  2. 인정하는 게 나은 지점 — 지적이 맞습니다
+
+  지적: 게시판과 게시글 타입 대응이 컴파일 타임에 안 막힌다
+  정직한 답: 맞습니다. NoticeBoard에 일반 Post를 넣어도 컴파일됩니다. Board<T 
+  extends Post>로 제네릭화하면 타입으로 강제할 수 있었습니다. 지금은 서버에서
+  런타임 검사(ClientHandler.requirePostType)로 막아뒀습니다 — 안 막으면 저장은
+  되고 다음 서버 시작 때 파일 파싱이 깨집니다.
+  ────────────────────────────────────────
+  지적: Post를 상속의 부모로도 쓰고 직접 인스턴스화도 한다
+  정직한 답: 보통은 abstract로 두는 게 정석입니다. 자유/학과/기숙사 게시글이
+  추가
+  필드가 하나도 없어서 FreeBoardPost 같은 빈 클래스를 3개 만드는 걸 피한
+  선택인데, 트레이드오프인 건 맞습니다.
+  ────────────────────────────────────────
+  지적: Packet.payload가 Object라 캐스팅투성이
+  정직한 답: 맞습니다. 다만 소켓 역직렬화는 어차피 Object로 돌아오고 제네릭은
+  타입 소거로 지워져서 Packet<T>로 해도 실익이 적습니다. 대신 RequestType 각
+  상수의 Javadoc에 payload 타입을 못박아 문서로 보완했습니다.
+  ────────────────────────────────────────
+  지적: 전역 락(DATA_LOCK) 하나로 모든 쓰기를 직렬화
+  정직한 답: 확장성은 나쁩니다. 게시판별 락으로 쪼갤 수 있지만 여러 자원을
+  동시에
+  건드리는 요청에서 데드락 위험이 생깁니다. 학내 규모(동시 수십  명)에서는 
+  단순·안전을 택한 의도적 트레이드오프라고 답하시면 됩니다.
+  ────────────────────────────────────────
+  지적: User의 setter를 "관리자만 호출"이라고 주석으로만 제한
+  정직한 답: 컴파일러가 강제하지 못합니다. 실제 강제는 서버(handleUserUpdate의
+  requireAdmin())에서만 일어납니다.
+  ────────────────────────────────────────
+  지적: 비밀번호 평문 저장/비교
+  정직한 답: 해시(예: SHA-256 + salt)가 맞습니다. 과제 범위에서 뺀 것이라면
+  그렇게 말하는 게 낫습니다.
+  ────────────────────────────────────────
+  지적: 글 내용에 | ^ ;를 쓰면 저장 형식이 깨진다
+  정직한 답: 이스케이프 처리가 없습니다. 문서에도 남은 과제로 적혀 있는 알려진
+  구멍입니다.
+  ────────────────────────────────────────
+  지적: 게시글 id는 클라이언트가, 채팅방 id는 서버가 채번
+  정직한 답: 일관성이 없습니다. 서버 채번이 정석인데, Post.id가 final이라
+  서버에서 바꾸려면 타입별로 객체를 다시 만들어야 해서 그렇게 남아 있습니다.
+
+  3. 한 문장 요약
+
+  ▎ "DB 없이 파일로 굴러가야 하고, 서버·클라이언트가 같은 모델을 공유해야 하는 
+  ▎ 제약에서, 공통 동작은 상속으로 한 번만 쓰고(게시판 6종·게시글 4종), 달라지는
+  ▎ 지점만 하위 클래스에 남기는 구조를 택했습니다. 권한 규칙은 모델에 두어 
+  ▎ 양쪽이 같은 규칙을 쓰되 최종 검증은 서버에서 다시 합니다."
+
+  교수님이 짚으신 게 위 중 어느 쪽인지(또는 다른 부분인지) 알려주시면, 그 항목만
+  코드 근거와 함께 답변용으로 다듬어 드리겠습니다. 실제로 고치는 게 낫다고
+  판단되는 항목이면 수정도 가능합니다 — 제네릭 Board<T>와 비밀번호 해시는 지금
+  구조에서 비교적 적은 변경으로 반영됩니다.
+
+✻ Baked for 1m 23s
+
+❯ classdiagram에서 ServerMain (우측 상단)                                       
+                                                                                
+  포트 번호(PORT_NO = 5000 등)를 지정하고 ServerSocket을 열어 클라이언트의      
+  접속을 대기(accept())하는 서버의 시작점입니다.                                
+                                                                                
+  ClientHandler (우측 상단/중간)                                                
+                                                                                
+  Runnable 인터페이스를 구현하며, 서버 측에서 연결된 각 클라이언트 소켓(Socket  
+  socket)을 1:1로 담당합니다.                                                   
+                                                                                
+  ObjectInputStream, ObjectOutputStream을 통해 클라이언트와 실시간 패킷을       
+  주고받고 처리(handlePacket, sendPacket)합니다.                                
+                                                                                
+  ServerConnection (최상단 우측)                                                
+                                                                                
+  클라이언트 측에서 서버와 소켓 통신을 유지하고 연결을 관리하는 클래스입니다.   
+                                                                                
+  소켓 및 스트림 생성, 패킷 송수신(sendPacket, readLoop 등)을 담당하며          
+  PacketListener에게 전달하는 역할을 합니다.                                    
+                                                                                
+  2. 데이터 전달 메커니즘 (패킷 & 리스너)                                       
+  Packet (중앙 상단)                                                            
+                                                                                
+  Serializable을 구현한 네트워크 데이터 전송 단위(DTO)입니다.                   
+                                                                                
+  RequestType(요청 종류), ResponseStatus(응답 상태), payload(실제 데이터/객체)  
+  등을 포함하여 서버와 클라이언트 간에 전달됩니다.                              
+                                                                                
+  PacketListener (인터페이스)                                                   
+                                                                                
+  수신된 패킷(onPacketReceived)을 이벤트를 통해 비동기/콜백 방식으로 처리하기   
+  위한 수신 인터페이스입니다.                                                   
+                                                                                
+  3. 프로토콜 정의 및 요청/응답 패킷 종류                                       
+  RequestType (enum): 패킷의 요청 종류를 구분하는 열거형 (예: 로그인, 게시글    
+  조회/작성/수정/삭제, 댓글 작성 등).                                           
+                                                                                
+  ResponseStatus (enum): 처리 결과 상태 (예: OK, ERROR 등).                     
+                                                                                
+  세부 Request/Payload 클래스들 (Serializable 구현체)                           
+                                                                                
+  LoginRequest / LoginResponse                                                  
+                                                                                
+  PostCreateOrUpdateRequest, PostDeleteRequest, PostListRequest                 
+                                                                                
+  CommentCreateRequest                                                          
+                                                                                
+  OneOnOne...Request (1:1 문의 관련)                                            
+                                                                                
+  ChatRoom...Request, OneToOnePayload (실시간 채팅 관련 데이터 패킷)            
+  이거를 왜 이렇게 했는ㄴ지                                                     
+● 통신 계층 설계의 "왜"를 정리했습니다. 먼저 다이어그램과 실제 코드의 이름이 
+  여러 군데 다릅니다 — 교수님이 코드를 열어보시면 바로 걸리는 부분이라 그것부터
+  짚겠습니다.
+
+  A. 다이어그램 ↔ 실제 코드 불일치
+
+  다이어그램: PacketListener.onPacketReceived
+  실제 코드: client/CT/PushListener.onPush
+  비고: 이름도 의미도 다름. 모든 수신이 아니라 서버가 먼저 보낸 푸시만 받는
+  콜백입니다
+  ────────────────────────────────────────
+  다이어그램: ClientHandler.handlePacket
+  실제 코드: handleRequest + dispatch
+  비고: 2단계로 나뉘어 있음(동기화 감싸기 / 타입 분기)
+  ────────────────────────────────────────
+  다이어그램: ServerMain.PORT_NO
+  실제 코드: PORT
+  비고:
+  ────────────────────────────────────────
+  다이어그램: LoginResponse
+  실제 코드: 없음
+  비고: LOGIN 응답 payload는 model.User 그 자체
+  ────────────────────────────────────────
+  다이어그램: PostListRequest
+  실제 코드: 없음
+  비고: POST_LIST 요청 payload는 String(boardKey) 하나
+  ────────────────────────────────────────
+  다이어그램: CommentCreateRequest
+  실제 코드: CommentAddRequest (+CommentDeleteRequest)
+  비고:
+  ────────────────────────────────────────
+  다이어그램: OneOnOne...Request (1:1 문의)
+  실제 코드: 없음
+  비고: 민원은 별도 요청 클래스 없이 ComplaintPost + PostCreateOrUpdateRequest로
+
+  처리
+  ────────────────────────────────────────
+  다이어그램: OneToOnePayload
+  실제 코드: ChatPushPayload
+  비고:
+  ────────────────────────────────────────
+  다이어그램: ChatRoom...Request
+  실제 코드: ChatRoomJoinRequest, ChatRoomJoinDecision, ChatSendRequest
+  비고: 3개로 분리
+  ────────────────────────────────────────
+  다이어그램: —
+  실제 코드: SessionRegistry 누락
+  비고: 이번에 추가한 클래스. 접속자 목록/푸시 대상 탐색
+
+  model/protocol 패키지의 실제 파일은 13개입니다: Packet, RequestType,
+  ResponseStatus, BoardKey, LoginRequest, PostCreateOrUpdateRequest,
+  PostDeleteRequest, CommentAddRequest, CommentDeleteRequest,
+  ChatRoomJoinRequest, ChatRoomJoinDecision, ChatSendRequest, ChatPushPayload.
+
+  B. 왜 이렇게 설계했나
+
+  1) 소켓 배관과 업무 로직을 분리한 이유
+  ServerMain은 접속 수락만, ClientHandler는 연결 하나의 수명주기만, 실제 업무는
+  model/DataStore가 합니다. 소켓 코드와 업무 로직이 한 클래스에 섞이면 업무 
+  로직을 소켓 없이는 검증할 수 없습니다. 실제로 이번에 핸들러를 구현할 때 배관
+  코드는 한 줄도 건드리지 않았습니다.
+
+  2) 클라이언트당 스레드 하나인 이유
+  readObject()는 데이터가 올 때까지 블로킹합니다. 한 스레드로 여러 클라이언트를
+  돌리면 조용한 클라이언트 한 명이 나머지 전부를 막습니다. 동시 접속 수십 명
+  규모에서는 NIO 셀렉터보다 스레드 격리가 단순하고 안전합니다.
+
+  3) 객체를 그대로 안 보내고 Packet이라는 봉투로 감싼 이유 — 핵심 질문입니다
+  소켓 하나에 로그인·게시글·채팅이 전부 섞여 흐릅니다. 받는 쪽은 봉투를 열기
+  전에 이게 뭔지 알아야 분기할 수 있습니다. 그래서 봉투에 네 가지가 들어갑니다:
+  - type — 무슨 요청인지 (분기 기준)
+  - requestId — 어느 요청에 대한 응답인지
+  - status/errorMessage — 소켓 너머로는 예외를 던질 수 없으므로, 실패를 예외
+  대신 데이터로 표현
+  - payload — 실제 내용물
+
+  4) requestId(UUID)가 필요한 이유
+  한 소켓에 요청·응답·푸시가 뒤섞여 흐르므로, 응답이 도착해도 누가 기다리던 
+  응답인지 모릅니다. ServerConnection은 요청마다 requestId → BlockingQueue를
+  등록해두고(pendingResponses), 응답이 오면 그 큐에 넣어 기다리던 스레드를
+  깨웁니다. 덕분에 GUI 코드는 sendRequest() 한 줄로 동기 함수처럼 쓰지만 실제
+  통신은 비동기입니다.
+
+  5) 푸시만 따로 리스너로 받는 이유
+  채팅·공지는 서버가 먼저 보내므로 대응하는 요청이 없습니다 → requestId가 null →
+  짝 맞출 큐가 없습니다. 그래서 isPush()로 갈라내 별도 콜백으로 넘깁니다. 이
+  콜백을 인터페이스로 둔 덕분에 통신 계층이 Swing을 전혀 모릅니다(의존성 역전) —
+  GUI가 구현해서 등록만 합니다.
+
+  6) RequestType을 enum으로 한 이유
+  "login" 같은 문자열이면 오타가 런타임에야 터집니다. enum이면 컴파일 타임에
+  잡히고, switch에서 빠뜨린 케이스가 보이며, 프로토콜 전체를 한 파일에서 조망할
+  수 있습니다. 각 상수 Javadoc에 요청/응답 payload 타입을 못박아 payload가
+  Object인 약점을 문서로 보완했습니다.
+
+  7) 요청마다 DTO 클래스를 따로 둔 이유
+  Map<String,Object>나 Object[]로 보내면 키 오타와 캐스팅 지옥이 됩니다. DTO는
+  생성자가 필요한 값을 강제하고 필드가 final이라 전송 중 변조가 없습니다. 다만
+  필드가 하나뿐인 요청(POST_LIST의 boardKey)은 래퍼 클래스가 순수 비용이라
+  String을 그대로 보냅니다 — 그래서 PostListRequest가 실제로는 없습니다.
+
+  8) DTO를 model/protocol에 모아 양쪽이 공유하는 이유
+  자바 직렬화는 양쪽이 같은 클래스(같은 serialVersionUID) 여야 역직렬화됩니다.
+  서버·클라이언트가 각자 정의하면 필드 하나만 달라도 통신이 깨집니다. 한
+  패키지에 모아 "프로토콜 규격서" 역할을 겸합니다.
+
+  C. 여기서 더 파고들면 나올 질문
+
+  "ObjectOutputStream을 먼저 만들고 flush()하는 게 왜 중요한가?"
+  → ObjectOutputStream 생성자는 스트림 헤더를 쓰고, ObjectInputStream 생성자는
+  그 헤더를 읽을 때까지 블로킹합니다. 양쪽이 입력 스트림을 먼저 만들면 서로를
+  기다리며 데드락입니다. 그래서 ClientHandler.run()과 ServerConnection 생성자가
+  대칭으로 출력→flush→입력 순서를 지킵니다.
+
+  "sendPacket에서 out.reset()은 왜?"
+  → 자바 직렬화는 이미 보낸 객체를 핸들로 캐시합니다. 같은 ChatRoom 객체를 두 번
+  보내면 두 번째는 참조만 나가서 예전 상태가 그대로 도착합니다. reset()으로
+  캐시를 비웁니다.
+
+  "SessionRegistry는 왜 DataStore에 안 넣었나?"
+  → DataStore는 파일로 영속되는 도메인 데이터, SessionRegistry는 끊기면 사라지는
+  휘발성 연결 상태입니다. 수명주기가 다른 것을 한 클래스에 섞으면 "서버 재시작
+  시 무엇을 복원해야 하는가"가 흐려집니다.
+
+  원하시면 위 불일치를 반영해 다이어그램용 클래스/메서드 목록을 실제 코드
+  기준으로 다시 뽑아 드리겠습니다.
+
+✻ Brewed for 1m 20s
+
+※ recap: 서버 로직 구현은 끝났고(핸들러 15개 + SessionRegistry, 테스트 88개 전부 통과), 지금은 교수님 질문에 대비해 클래스 설계 근거를 설명하는 중입니다. 다음으로 다이어그램의 이름 불일치를 실제 코드 기준으로 정리해 드릴 수 있습니다. (disable recaps in /config)
+
+❯ LoginPanel.java:32 — initLayout, :41 구현                                     
+
+  Read 2 files (ctrl+o to expand)
+
+● Update(client\GUI\LoginPanel.java)
+  ⎿  Added 7 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Font;                                          
+       4 +import java.awt.GridBagConstraints;                            
+       5 +import java.awt.GridBagLayout;                                 
+       6 +import java.awt.Insets;                                        
+       7 +import javax.swing.BorderFactory;                              
+       8  import javax.swing.JButton;
+       9 +import javax.swing.JLabel;                                     
+      10  import javax.swing.JOptionPane;
+      11  import javax.swing.JPanel;
+      12  import javax.swing.JPasswordField;
+      13  import javax.swing.JTextField;
+      14  
+      15 +import model.User;                                             
+      16  import model.protocol.LoginRequest;
+      17  import model.protocol.Packet;
+      18  import model.protocol.RequestType;
+
+● Update(client\GUI\LoginPanel.java)
+  ⎿  Added 52 lines, removed 1 line
+      27      private final JTextField idField = new JTextField();
+      28      private final JPasswordField passwordField = new JPasswordF
+          ield();
+      29      private final JButton loginButton = new JButton("로그인");
+      30 +    private final JButton registerButton = new JButton("회원가 
+         +입");                                                          
+      31  
+      32      public LoginPanel(MainFrame mainFrame) {
+      33          this.mainFrame = mainFrame;
+      34          loginButton.addActionListener(e -> attemptLogin());
+      35 +        registerButton.addActionListener(e -> mainFrame.switchT
+         +o("register"));                                                
+      36 +        // 두 입력칸에서 엔터를 쳐도 로그인되게 한다 (버튼까지 
+         +마우스로 가지 않아도 되도록).                                  
+      37 +        idField.addActionListener(e -> attemptLogin());        
+      38 +        passwordField.addActionListener(e -> attemptLogin());  
+      39          initLayout();
+      40      }
+      41  
+      42      /** idField/passwordField/loginButton을 이 패널(this)에 배
+          치하는 부분 — 디자인은 자유. */
+      43      private void initLayout() {
+      39 -        throw new UnsupportedOperationException("TODO: 구현 필 
+         -요");                                                          
+      44 +        // GridBagLayout에 폼 하나만 올려서 창 크기가 변해도 가
+         +운데에 머무르게 한다.                                          
+      45 +        setLayout(new GridBagLayout());                        
+      46 +        JPanel form = new JPanel(new GridBagLayout());         
+      47 +        form.setBorder(BorderFactory.createEmptyBorder(24, 32, 
+         +24, 32));                                                      
+      48 +                                                               
+      49 +        GridBagConstraints c = new GridBagConstraints();       
+      50 +        c.insets = new Insets(6, 6, 6, 6);                     
+      51 +                                                               
+      52 +        JLabel title = new JLabel("TUK Community");            
+      53 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f
+         +));                                                            
+      54 +        c.gridx = 0;                                           
+      55 +        c.gridy = 0;                                           
+      56 +        c.gridwidth = 2;                                       
+      57 +        c.anchor = GridBagConstraints.CENTER;                  
+      58 +        c.insets = new Insets(6, 6, 20, 6);                    
+      59 +        form.add(title, c);                                    
+      60 +                                                               
+      61 +        c.gridwidth = 1;                                       
+      62 +        c.insets = new Insets(6, 6, 6, 6);                     
+      63 +        c.anchor = GridBagConstraints.LINE_END;                
+      64 +        c.gridy = 1;                                           
+      65 +        form.add(new JLabel("학번"), c);                       
+      66 +        c.gridy = 2;                                           
+      67 +        form.add(new JLabel("비밀번호"), c);                   
+      68 +                                                               
+      69 +        c.gridx = 1;                                           
+      70 +        c.anchor = GridBagConstraints.LINE_START;              
+      71 +        c.fill = GridBagConstraints.HORIZONTAL;                
+      72 +        idField.setColumns(16);                                
+      73 +        passwordField.setColumns(16);                          
+      74 +        c.gridy = 1;                                           
+      75 +        form.add(idField, c);                                  
+      76 +        c.gridy = 2;                                           
+      77 +        form.add(passwordField, c);                            
+      78 +                                                               
+      79 +        JPanel buttons = new JPanel();                         
+      80 +        buttons.add(loginButton);                              
+      81 +        buttons.add(registerButton);                           
+      82 +        c.gridx = 0;                                           
+      83 +        c.gridy = 3;                                           
+      84 +        c.gridwidth = 2;                                       
+      85 +        c.fill = GridBagConstraints.NONE;                      
+      86 +        c.anchor = GridBagConstraints.CENTER;                  
+      87 +        c.insets = new Insets(18, 6, 0, 6);                    
+      88 +        form.add(buttons, c);                                  
+      89 +                                                               
+      90 +        add(form, new GridBagConstraints());                   
+      91      }
+      92  
+      93      private void attemptLogin() {
+
+● Update(client\GUI\LoginPanel.java)
+  ⎿  Added 6 lines, removed 4 lines
+       96          Packet request = Packet.request(RequestType.LOGIN, new
+            LoginRequest(id, password));
+       97          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+       98          if (response.getStatus() == ResponseStatus.OK) {
+       99 -            // TODO: 구현 필요. 관리자는 학생 화면(home)에 접 
+          -근하면 안 되므로 반드시 분기한다.                             
+      100 -            // 예: User user = (User) response.getPayload();  
+      101 -            //     mainFrame.setCurrentUser(user);            
+      102 -            //     mainFrame.switchTo(user.isAdmin() ? "admin"
+          - : "home");                                                   
+       99 +            User user = (User) response.getPayload();         
+      100 +            mainFrame.setCurrentUser(user);                   
+      101 +            passwordField.setText(""); // 로그아웃 후 다시 돌 
+          +아왔을 때 비번이 남아있지 않도록                              
+      102 +            // 관리자는 학생 화면(home)에 들어가면 안 된다 — d
+          +ocuments/gui.md §2                                            
+      103 +            mainFrame.switchTo(user.isAdmin() ? "admin" : "hom
+          +e");                                                          
+      104          } else {
+      105 +            passwordField.setText("");                        
+      106              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "로그인 실패", JOptionPane.ERROR_MESSAGE);
+      107          }
+      108      }
+
+  Made 1 scratchpad edit +92, read 4 files, ran 4 shell commands (ctrl+o to expand)
+
+● Layout and the admin/student branch both check out. The failure case
+  screenshot shows no dialog, which is suspicious — let me confirm the error
+  dialog actually appears:
+
+  Made 1 scratchpad edit +73, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Background command "Start test server for GUI check" failed with exit code 127
+
+● 구현한 로그인 화면 (실제 실행 캡처, 900x600)
+
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (17.2K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\student-1-login.pnB)
+          g
+
+● LoginPanel 두 군데 구현했습니다.
+
+  :32 initLayout()
+
+  GridBagLayout 안에 폼 패널 하나를 올려, 창 크기가 바뀌어도 항상 가운데에
+  머무릅니다. 제목 → 학번/비밀번호 라벨+입력칸 → 버튼 줄 구성입니다.
+
+  :41 로그인 성공 분기
+
+  User user = (User) response.getPayload();
+  mainFrame.setCurrentUser(user);
+  passwordField.setText("");
+  // 관리자는 학생 화면(home)에 들어가면 안 된다 — documents/gui.md §2
+  mainFrame.switchTo(user.isAdmin() ? "admin" : "home");
+
+  실패 시에도 비밀번호 칸을 비웁니다 (로그아웃 후 되돌아왔을 때 비번이 남지
+  않도록).
+
+  요청 범위에서 하나 추가한 것
+
+  회원가입 버튼을 넣고 switchTo("register")에 연결했습니다. register 화면을 여는
+  경로가 프로젝트 어디에도 없어서, 이게 없으면 RegisterPanel에 도달할 방법이
+  아예 없습니다. 원치 않으시면 버튼 필드와 리스너 두 줄만 지우면 됩니다. 함께 두
+  입력칸에서 엔터로도 로그인되게 했습니다.
+
+  검증
+
+  테스트 서버를 띄우고 실제로 창을 만들어 클릭까지 시켜 화면을 캡처했습니다
+  (나머지 패널은 아직 생성자에서 예외를 던져서 더미로 대체).
+
+  ┌──────────────────────┬──────────────────────────────────────────────────┐
+  │       시나리오       │                       결과                       │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ 레이아웃 렌더링      │ 위 캡처                                          │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ 학생(2026591007)     │ → home 화면으로 전환 확인                        │
+  │ 로그인               │                                                  │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ 관리자(admin001)     │ → admin 화면으로 전환 확인                       │
+  │ 로그인               │                                                  │
+  ├──────────────────────┼──────────────────────────────────────────────────┤
+  │ 잘못된 비밀번호      │ "로그인 실패 / 아이디 또는 비밀번호가 올바르지   │
+  │                      │ 않습니다" 다이얼로그 확인                        │
+  └──────────────────────┴──────────────────────────────────────────────────┘
+
+  전체 프로젝트 컴파일 통과, 확인용 out/은 지웠습니다.
+
+  알아두실 점
+
+  MainFrame.main()은 패널 15개를 전부 생성하는데 나머지 14개의 initLayout()이
+  아직 UnsupportedOperationException을 던집니다. 즉 java -cp out 
+  client.GUI.MainFrame은 아직 첫 화면도 못 띄웁니다 — HomePanel 생성 시점에
+  죽습니다. 실제로 로그인 화면을 보시려면 나머지 패널들의 initLayout()도 채워야
+  합니다 (가장 급한 건 RegisterPanel, HomePanel, AdminPanel 셋). 이어서
+  진행할까요?
+
+✻ Churned for 4m 32s
+
+❯ - RegisterPanel.java:32,45 — initLayout, 가입 성공 후 화면전환 을 구현해.     
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(client\GUI\RegisterPanel.java)
+  ⎿  Added 7 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Color;                                         
+       4 +import java.awt.Font;                                          
+       5 +import java.awt.GridBagConstraints;                            
+       6 +import java.awt.GridBagLayout;                                 
+       7 +import java.awt.Insets;                                        
+       8 +import javax.swing.BorderFactory;                              
+       9  import javax.swing.JButton;
+      10  import javax.swing.JCheckBox;
+      11 +import javax.swing.JLabel;                                     
+      12  import javax.swing.JOptionPane;
+      13  import javax.swing.JPanel;
+      14  import javax.swing.JPasswordField;
+
+● Update(client\GUI\RegisterPanel.java)
+  ⎿  Added 69 lines, removed 1 line
+       27      private final JCheckBox dormitoryCheckBox = new JCheckBox(
+           "기숙사생");
+       28      private final JPasswordField passwordField = new JPassword
+           Field();
+       29      private final JButton registerButton = new JButton("가입하
+           기");
+       30 +    private final JButton backButton = new JButton("로그인으로
+          +");                                                           
+       31  
+       32      public RegisterPanel(MainFrame mainFrame) {
+       33          this.mainFrame = mainFrame;
+       34          registerButton.addActionListener(e -> attemptRegister(
+           ));
+       35 +        backButton.addActionListener(e -> mainFrame.switchTo("
+          +login"));                                                     
+       36 +        // 입력칸에서 엔터를 쳐도 가입되게 한다 (LoginPanel과 
+          +동일한 조작감).                                               
+       37 +        idField.addActionListener(e -> attemptRegister());    
+       38 +        departmentField.addActionListener(e -> attemptRegister
+          +());                                                          
+       39 +        passwordField.addActionListener(e -> attemptRegister()
+          +);                                                            
+       40          initLayout();
+       41      }
+       42  
+       43      /** 위 필드들을 이 패널(this)에 배치하는 부분 — 디자인은 
+           자유. */
+       44      private void initLayout() {
+       39 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       45 +        // LoginPanel과 같은 구성: GridBagLayout 위에 폼 하나 
+          +만 올려 항상 가운데 정렬.                                     
+       46 +        setLayout(new GridBagLayout());                       
+       47 +        JPanel form = new JPanel(new GridBagLayout());        
+       48 +        form.setBorder(BorderFactory.createEmptyBorder(24, 32,
+          + 24, 32));                                                    
+       49 +                                                              
+       50 +        GridBagConstraints c = new GridBagConstraints();      
+       51 +                                                              
+       52 +        JLabel title = new JLabel("회원가입");                
+       53 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22
+          +f));                                                          
+       54 +        c.gridx = 0;                                          
+       55 +        c.gridy = 0;                                          
+       56 +        c.gridwidth = 2;                                      
+       57 +        c.anchor = GridBagConstraints.CENTER;                 
+       58 +        c.insets = new Insets(6, 6, 20, 6);                   
+       59 +        form.add(title, c);                                   
+       60 +                                                              
+       61 +        c.gridwidth = 1;                                      
+       62 +        c.insets = new Insets(6, 6, 6, 6);                    
+       63 +        c.anchor = GridBagConstraints.LINE_END;               
+       64 +        c.gridy = 1;                                          
+       65 +        form.add(new JLabel("학번"), c);                      
+       66 +        c.gridy = 2;                                          
+       67 +        form.add(new JLabel("학과"), c);                      
+       68 +        c.gridy = 3;                                          
+       69 +        form.add(new JLabel("비밀번호"), c);                  
+       70 +                                                              
+       71 +        c.gridx = 1;                                          
+       72 +        c.anchor = GridBagConstraints.LINE_START;             
+       73 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       74 +        idField.setColumns(16);                               
+       75 +        departmentField.setColumns(16);                       
+       76 +        passwordField.setColumns(16);                         
+       77 +        c.gridy = 1;                                          
+       78 +        form.add(idField, c);                                 
+       79 +        c.gridy = 2;                                          
+       80 +        form.add(departmentField, c);                         
+       81 +        c.gridy = 3;                                          
+       82 +        form.add(passwordField, c);                           
+       83 +                                                              
+       84 +        c.gridy = 4;                                          
+       85 +        c.fill = GridBagConstraints.NONE;                     
+       86 +        c.insets = new Insets(0, 6, 0, 6);                    
+       87 +        form.add(dormitoryCheckBox, c);                       
+       88 +                                                              
+       89 +        // 학과명이 서버에 등록된 이름과 한 글자라도 다르면 학
+          +과 게시판에 들어갈 수 없다.                                   
+       90 +        JLabel hint = new JLabel("※ 학과는 서버에 등록된 학과 
+          +명과 정확히 같아야 합니다");                                  
+       91 +        hint.setFont(hint.getFont().deriveFont(11f));         
+       92 +        hint.setForeground(Color.GRAY);                       
+       93 +        c.gridx = 0;                                          
+       94 +        c.gridy = 5;                                          
+       95 +        c.gridwidth = 2;                                      
+       96 +        c.anchor = GridBagConstraints.CENTER;                 
+       97 +        c.insets = new Insets(10, 6, 0, 6);                   
+       98 +        form.add(hint, c);                                    
+       99 +                                                              
+      100 +        JPanel buttons = new JPanel();                        
+      101 +        buttons.add(registerButton);                          
+      102 +        buttons.add(backButton);                              
+      103 +        c.gridy = 6;                                          
+      104 +        c.insets = new Insets(14, 6, 0, 6);                   
+      105 +        form.add(buttons, c);                                 
+      106 +                                                              
+      107 +        add(form, new GridBagConstraints());                  
+      108      }
+      109  
+      110      private void attemptRegister() {
+
+● Update(client\GUI\RegisterPanel.java)
+  ⎿  Added 12 lines, removed 1 line
+      117          Packet request = Packet.request(RequestType.REGISTER, 
+           newUser);
+      118          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+      119          if (response.getStatus() == ResponseStatus.OK) {
+      120 -            // TODO: 구현 필요. 예: mainFrame.switchTo("login"
+          -);                                                            
+      120 +            JOptionPane.showMessageDialog(this, "가입이 완료되
+          +었습니다. 로그인해 주세요.",                                  
+      121 +                    "가입 완료", JOptionPane.INFORMATION_MESSA
+          +GE);                                                          
+      122 +            clearFields(); // 다음에 이 화면으로 다시 들어왔을
+          + 때 남의 입력이 남아있지 않도록                               
+      123 +            mainFrame.switchTo("login");                      
+      124          } else {
+      125 +            passwordField.setText("");                        
+      126              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "가입 실패", JOptionPane.ERROR_MESSAGE);
+      127          }
+      128      }
+      129 +                                                              
+      130 +    private void clearFields() {                              
+      131 +        idField.setText("");                                  
+      132 +        departmentField.setText("");                          
+      133 +        passwordField.setText("");                            
+      134 +        dormitoryCheckBox.setSelected(false);                 
+      135 +    }                                                         
+      136  }
+
+  Made 1 scratchpad edit +121, read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+● The capture grabbed another window that was on top. Making the test frame
+  always-on-top so screenshots are deterministic:
+
+  Made 2 scratchpad edits +18 -9, read 3 files, ran 3 shell commands (ctrl+o to expand)
+● Background command "Start test server" failed with exit code 127
+
+● 구현한 회원가입 화면 (실제 실행 캡처, 값 입력 상태)
+
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (15.7K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\reg-2-filled.png  B)
+
+● RegisterPanel 두 군데 구현했습니다. LoginPanel과 같은 구성(가운데 정렬
+  GridBagLayout 폼)으로 맞췄습니다.
+
+  :32 initLayout()
+
+  제목 → 학번/학과/비밀번호 → 기숙사생 체크박스 → 안내 문구 → 버튼 줄.
+
+  안내 문구(※ 학과는 서버에 등록된 학과명과 정확히 같아야 합니다)를 넣은 이유는,
+  학과명이 한 글자라도 다르면 그 학생은 학과 게시판에 영영 못 들어가기 
+  때문입니다. DataStore.registerBoards()가 "AI소프트웨어학과" 같은 문자열을
+  그대로 boardKey로 쓰고, 서버는 가입 시 학과명이 실제 존재하는지 검사하지
+  않습니다. 근본 해결은 departmentField를 JComboBox로 바꾸는 것인데, 그러면
+  스켈레톤의 필드 타입이 바뀌고 학과 목록을 클라이언트에 하드코딩하게 됩니다 —
+  원하시면 그렇게 바꾸겠습니다.
+
+  :45 가입 성공 후
+
+  JOptionPane.showMessageDialog(this, "가입이 완료되었습니다. 로그인해 주세요.",
+          "가입 완료", JOptionPane.INFORMATION_MESSAGE);
+  clearFields();
+  mainFrame.switchTo("login");
+
+  clearFields()로 학번/학과/비번/체크박스를 비웁니다 — 안 비우면 다음 사람이 이
+  화면에 들어왔을 때 앞사람이 친 학번과 비밀번호가 그대로 남습니다. 실패 시에도
+  비밀번호만 비웁니다.
+
+  요청 범위에서 추가한 것
+
+  로그인으로 버튼 — 스켈레톤에는 뒤로 가는 수단이 없어서, 가입 화면에 들어오면
+  가입에 성공하기 전까지 로그인 화면으로 돌아갈 방법이 없습니다. 지난번
+  LoginPanel의 회원가입 버튼과 짝입니다. 세 입력칸에서 엔터로도 가입됩니다.
+
+  검증
+
+  테스트 서버를 띄우고 실제 창을 만들어 버튼을 눌러 확인했습니다.
+
+  ┌────────────────┬────────────────────────────────────────────────────────┐
+  │    시나리오    │                          결과                          │
+  ├────────────────┼────────────────────────────────────────────────────────┤
+  │ 폼 렌더링      │ 위 캡처                                                │
+  ├────────────────┼────────────────────────────────────────────────────────┤
+  │ 새 학번 가입   │ "가입 완료" 다이얼로그 → login 화면으로 전환 확인      │
+  ├────────────────┼────────────────────────────────────────────────────────┤
+  │ 같은 학번      │ "가입 실패 / 이미 존재하는 학번입니다: 2027000003"     │
+  │ 재가입         │ 다이얼로그 확인                                        │
+  └────────────────┴────────────────────────────────────────────────────────┘
+
+  전체 컴파일 통과, 확인용 out/은 지웠습니다. 다음은 HomePanel(학생 허브)과
+  AdminPanel(관리자 진입점)인데, 이 둘이 있어야 로그인 직후 화면이 실제로 뜹니다
+  — 이어서 할까요?
+
+✻ Worked for 3m 46s
+
+❯ 관리자 (client/GUI/)                                                          
+  - AdminPanel.java — initLayout, openWriteNotice()(공지 작성 화면으로),        
+  openComplaintInbox()(민원함으로)                                              
+  - UserEditPanel.java — initLayout, search()(학번으로 유저 조회 — 이 조회용    
+  RequestType이 아직 프로토콜에 없어서 새로 추가해야 할 수도 있음)              
+  - NoticePostEditorPanel.java — initLayout, 기존 값 채우기, generateId(), 저장 
+  후 화면전환                                                                   
+
+  Read 4 files (ctrl+o to expand)
+
+● Starting with the protocol gap you flagged — a "학번으로 유저 1명 조회"
+  request doesn't exist, so I'm adding one:
+
+● Update(model\protocol\RequestType.java)
+  ⎿  Added 3 lines
+      18      /** 요청 payload: {@code model.User}(수정 반영된 전체 정보)
+          , 관리자 전용. 응답 payload: 없음 */
+      19      USER_UPDATE,
+      20  
+      21 +    /** 요청 payload: {@code String}(학번), 관리자 전용. 응답 p
+         +ayload: {@code model.User}. 조회 전용 */                       
+      22 +    USER_LOOKUP,                                               
+      23 +                                                               
+      24      /** 요청 payload: {@code String}(boardKey). 응답 payload: {
+          @code List<model.boards.Post>} */
+      25      POST_LIST,
+      26  
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 2 lines
+      118                  return handleLogout(request);
+      119              case USER_UPDATE:
+      120                  return handleUserUpdate(request);
+      121 +            case USER_LOOKUP:                                 
+      122 +                return handleUserLookup(request);             
+      123              case POST_LIST:
+      124                  return handlePostList(request);
+      125              case POST_CREATE:
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 7 lines
+      225          return Packet.success(request, null);
+      226      }
+      227  
+      228 +    /** 회원정보 수정 화면에서 학번으로 회원 1명을 찾는 용도. 
+          +User에는 비밀번호가 들어 있으므로 관리자 전용. */             
+      229 +    private Packet handleUserLookup(Packet request) {         
+      230 +        requireAdmin();                                       
+      231 +        String userId = (String) request.getPayload();        
+      232 +        return Packet.success(request, dataStore.getUser(userI
+          +d)); // 없으면 NoSuchElementException                         
+      233 +    }                                                         
+      234 +                                                              
+      235      private Packet handlePostList(Packet request) {
+      236          requireLogin();
+      237          String boardKey = (String) request.getPayload();
+
+● Update(documents\protocol.md)
+  ⎿  Added 1 line
+      39  | `REGISTER` | `model.User` | 없음 | |
+      40  | `LOGOUT` | 없음 | 없음 | |
+      41  | `USER_UPDATE` | `model.User`(수정 반영본) | 없음 | 관리자 전
+          용 |
+      42 +| `USER_LOOKUP` | `String`(학번) | `model.User` | 관리자 전용 —
+         + 조회 전용이라 synchronized 안 함 |                            
+      43  | `POST_LIST` | `String`(boardKey) | `List<model.boards.Post>` 
+          | 조회 전용 — synchronized 안 함 |
+      44  | `POST_CREATE` | `PostCreateOrUpdateRequest` | `model.boards.P
+          ost`(저장 결과) | |
+      45  | `POST_UPDATE` | `PostCreateOrUpdateRequest` | 없음 | |
+
+● Now AdminPanel — initLayout, openPostManagement(), logout()
+  (openWriteNotice/openComplaintInbox were already written in the skeleton):
+
+● Update(client\GUI\AdminPanel.java)
+  ⎿  Added 11 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Dimension;                                     
+       4 +import java.awt.Font;                                          
+       5 +import java.awt.GridBagConstraints;                            
+       6 +import java.awt.GridBagLayout;                                 
+       7 +import java.awt.Insets;                                        
+       8 +import javax.swing.BorderFactory;                              
+       9  import javax.swing.JButton;
+      10 +import javax.swing.JLabel;                                     
+      11 +import javax.swing.JOptionPane;                                
+      12  import javax.swing.JPanel;
+      13  
+      14  import model.protocol.BoardKey;
+      15 +import model.protocol.Packet;                                  
+      16 +import model.protocol.RequestType;                             
+      17 +import model.protocol.ResponseStatus;                          
+      18  
+      19  /**
+      20   * 관리자의 진짜 첫 화면(로그인 성공 시 관리자는 "home"이 아니
+          라 이 화면으로 바로 옴).
+
+● Update(client\GUI\AdminPanel.java)
+  ⎿  Added 34 lines, removed 1 line
+      41  
+      42      /** 위 버튼들을 배치하는 부분 — 디자인은 자유. */
+      43      private void initLayout() {
+      44 -        throw new UnsupportedOperationException("TODO: 구현 필 
+         -요");                                                          
+      44 +        setLayout(new GridBagLayout());                        
+      45 +        JPanel menu = new JPanel(new GridBagLayout());         
+      46 +        menu.setBorder(BorderFactory.createEmptyBorder(24, 32, 
+         +24, 32));                                                      
+      47 +                                                               
+      48 +        GridBagConstraints c = new GridBagConstraints();       
+      49 +        c.gridx = 0;                                           
+      50 +        c.fill = GridBagConstraints.HORIZONTAL;                
+      51 +                                                               
+      52 +        JLabel title = new JLabel("관리자 메뉴");              
+      53 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f
+         +));                                                            
+      54 +        c.gridy = 0;                                           
+      55 +        c.anchor = GridBagConstraints.CENTER;                  
+      56 +        c.fill = GridBagConstraints.NONE;                      
+      57 +        c.insets = new Insets(6, 6, 20, 6);                    
+      58 +        menu.add(title, c);                                    
+      59 +        // 로그인한 관리자 이름은 여기 표시하지 않는다 — initLa
+         +yout은 로그인 전(생성자)에 실행되어                            
+      60 +        // mainFrame.getCurrentUser()가 아직 null이다.         
+      61 +                                                               
+      62 +        c.fill = GridBagConstraints.HORIZONTAL;                
+      63 +        c.insets = new Insets(4, 6, 4, 6);                     
+      64 +        int row = 1;                                           
+      65 +        for (JButton button : new JButton[] {                  
+      66 +                writeNoticeButton, postManagementButton, compla
+         +intInboxButton, userEditButton }) {                            
+      67 +            button.setPreferredSize(new Dimension(220, 40));   
+      68 +            c.gridy = row++;                                   
+      69 +            menu.add(button, c);                               
+      70 +        }                                                      
+      71 +                                                               
+      72 +        logoutButton.setPreferredSize(new Dimension(220, 32)); 
+      73 +        c.gridy = row;                                         
+      74 +        c.insets = new Insets(20, 6, 4, 6);                    
+      75 +        menu.add(logoutButton, c);                             
+      76 +                                                               
+      77 +        add(menu, new GridBagConstraints());                   
+      78      }
+      79  
+      80      private void openWriteNotice() {
+
+● Update(client\GUI\AdminPanel.java)
+  ⎿  Added 27 lines, removed 1 line
+       87       *  switchTo("postList")로 연결한다. 뒤로가기가 관리자 홈(
+           "admin")으로 오도록 backTarget을
+       88       *  꼭 "admin"으로 넘길 것 — 학생용 "home"으로 넘기면 관리
+           자가 학생 화면에 갇힌다. */
+       89      private void openPostManagement() {
+       90 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       90 +        // 게시판 이름은 화면 표시용, 실제로 서버에 보내는 값 
+          +은 BoardKey 상수다.                                           
+       91 +        // 민원함은 전용 버튼이 따로 있으므로 여기 목록에서는 
+          +뺀다.                                                         
+       92 +        String[] labels = { "자유게시판", "공동구매", "기숙사 
+          +게시판", "공지사항", "학과게시판(직접 입력)" };               
+       93 +        String[] keys = { BoardKey.FREE, BoardKey.GROUP_BUY, B
+          +oardKey.DORM, BoardKey.NOTICE, null };                        
+       94 +                                                              
+       95 +        Object choice = JOptionPane.showInputDialog(this, "관 
+          +리할 게시판을 고르세요", "게시글 관리",                       
+       96 +                JOptionPane.PLAIN_MESSAGE, null, labels, label
+          +s[0]);                                                        
+       97 +        if (choice == null) {                                 
+       98 +            return; // 취소                                   
+       99 +        }                                                     
+      100 +        String boardKey = null;                               
+      101 +        for (int i = 0; i < labels.length; i++) {             
+      102 +            if (labels[i].equals(choice)) {                   
+      103 +                boardKey = keys[i];                           
+      104 +            }                                                 
+      105 +        }                                                     
+      106 +        if (boardKey == null) {                               
+      107 +            // 학과 게시판은 학과가 늘어날 수 있어서 목록으로 
+          +고정하지 않고 직접 입력받는다.                                
+      108 +            String department = JOptionPane.showInputDialog(th
+          +is, "학과명을 입력하세요 (서버에 등록된 이름과 정확히 일치)");
+      109 +            if (department == null || department.trim().isEmpt
+          +y()) {                                                        
+      110 +                return;                                       
+      111 +            }                                                 
+      112 +            boardKey = department.trim();                     
+      113 +        }                                                     
+      114 +        // 뒤로가기가 학생 화면("home")이 아니라 관리자 홈으로
+          + 오도록 backTarget은 항상 "admin".                            
+      115 +        ((PostListPanel) mainFrame.getScreen("postList")).open
+          +(boardKey, "admin");                                          
+      116 +        mainFrame.switchTo("postList");                       
+      117      }
+      118  
+      119      private void openComplaintInbox() {
+
+● Update(client\GUI\AdminPanel.java)
+  ⎿  Added 8 lines, removed 1 line
+      122      }
+      123  
+      124      private void logout() {
+      125 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      125 +        Packet response = mainFrame.getConnection().sendReques
+          +t(Packet.request(RequestType.LOGOUT, null));                  
+      126 +        if (response.getStatus() != ResponseStatus.OK) {      
+      127 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "로그아웃 실패", JOptionPane.ERROR_MESSAGE);    
+      128 +            return;                                           
+      129 +        }                                                     
+      130 +        // 서버 세션이 끊겼으므로 클라이언트가 들고 있던 유저 
+          +도 함께 비운다.                                               
+      131 +        mainFrame.setCurrentUser(null);                       
+      132 +        mainFrame.switchTo("login");                          
+      133      }
+      134  }
+
+● Now UserEditPanel — layout plus the new lookup request:
+
+● Update(client\GUI\UserEditPanel.java)
+  ⎿  Added 7 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Color;                                         
+       4 +import java.awt.Font;                                          
+       5 +import java.awt.GridBagConstraints;                            
+       6 +import java.awt.GridBagLayout;                                 
+       7 +import java.awt.Insets;                                        
+       8 +import javax.swing.BorderFactory;                              
+       9  import javax.swing.JButton;
+      10  import javax.swing.JCheckBox;
+      11 +import javax.swing.JLabel;                                     
+      12  import javax.swing.JOptionPane;
+      13  import javax.swing.JPanel;
+      14  import javax.swing.JPasswordField;
+
+● Update(client\GUI\UserEditPanel.java)
+  ⎿  Added 123 lines, removed 5 lines
+       28      private final JCheckBox dormitoryCheckBox = new JCheckBox(
+           "기숙사생");
+       29      private final JPasswordField passwordField = new JPassword
+           Field();
+       30      private final JButton saveButton = new JButton("저장");
+       31 +    private final JButton backButton = new JButton("관리자 홈"
+          +);                                                            
+       32 +    private final JLabel resultLabel = new JLabel(" ");       
+       33      private User editingUser;
+       34  
+       35      public UserEditPanel(MainFrame mainFrame) {
+       36          this.mainFrame = mainFrame;
+       37          searchButton.addActionListener(e -> search());
+       38          saveButton.addActionListener(e -> save());
+       39 +        backButton.addActionListener(e -> mainFrame.switchTo("
+          +admin"));                                                     
+       40 +        searchIdField.addActionListener(e -> search()); // 학 
+          +번 입력 후 엔터로 조회                                        
+       41          initLayout();
+       42      }
+       43  
+       44      /** 위 필드들을 배치하는 부분 — 디자인은 자유. */
+       45      private void initLayout() {
+       42 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       46 +        setLayout(new GridBagLayout());                       
+       47 +        JPanel form = new JPanel(new GridBagLayout());        
+       48 +        form.setBorder(BorderFactory.createEmptyBorder(24, 32,
+          + 24, 32));                                                    
+       49 +                                                              
+       50 +        GridBagConstraints c = new GridBagConstraints();      
+       51 +                                                              
+       52 +        JLabel title = new JLabel("회원정보 수정");           
+       53 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22
+          +f));                                                          
+       54 +        c.gridx = 0;                                          
+       55 +        c.gridy = 0;                                          
+       56 +        c.gridwidth = 3;                                      
+       57 +        c.anchor = GridBagConstraints.CENTER;                 
+       58 +        c.insets = new Insets(6, 6, 20, 6);                   
+       59 +        form.add(title, c);                                   
+       60 +                                                              
+       61 +        // 1행: 학번 + 조회 버튼                              
+       62 +        c.gridwidth = 1;                                      
+       63 +        c.insets = new Insets(6, 6, 6, 6);                    
+       64 +        c.anchor = GridBagConstraints.LINE_END;               
+       65 +        c.gridy = 1;                                          
+       66 +        form.add(new JLabel("학번"), c);                      
+       67 +        c.gridx = 1;                                          
+       68 +        c.anchor = GridBagConstraints.LINE_START;             
+       69 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       70 +        searchIdField.setColumns(14);                         
+       71 +        form.add(searchIdField, c);                           
+       72 +        c.gridx = 2;                                          
+       73 +        c.fill = GridBagConstraints.NONE;                     
+       74 +        form.add(searchButton, c);                            
+       75 +                                                              
+       76 +        // 조회 결과 안내 (조회 전에는 아래 입력칸이 비활성)  
+       77 +        resultLabel.setFont(resultLabel.getFont().deriveFont(1
+          +1f));                                                         
+       78 +        resultLabel.setForeground(Color.GRAY);                
+       79 +        c.gridx = 1;                                          
+       80 +        c.gridy = 2;                                          
+       81 +        c.gridwidth = 2;                                      
+       82 +        c.anchor = GridBagConstraints.LINE_START;             
+       83 +        c.insets = new Insets(0, 6, 10, 6);                   
+       84 +        form.add(resultLabel, c);                             
+       85 +                                                              
+       86 +        c.gridwidth = 1;                                      
+       87 +        c.insets = new Insets(6, 6, 6, 6);                    
+       88 +        c.anchor = GridBagConstraints.LINE_END;               
+       89 +        c.gridx = 0;                                          
+       90 +        c.gridy = 3;                                          
+       91 +        form.add(new JLabel("학과"), c);                      
+       92 +        c.gridy = 5;                                          
+       93 +        form.add(new JLabel("새 비밀번호"), c);               
+       94 +                                                              
+       95 +        c.gridx = 1;                                          
+       96 +        c.gridwidth = 2;                                      
+       97 +        c.anchor = GridBagConstraints.LINE_START;             
+       98 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       99 +        departmentField.setColumns(16);                       
+      100 +        passwordField.setColumns(16);                         
+      101 +        c.gridy = 3;                                          
+      102 +        form.add(departmentField, c);                         
+      103 +        c.gridy = 4;                                          
+      104 +        c.fill = GridBagConstraints.NONE;                     
+      105 +        form.add(dormitoryCheckBox, c);                       
+      106 +        c.gridy = 5;                                          
+      107 +        c.fill = GridBagConstraints.HORIZONTAL;               
+      108 +        form.add(passwordField, c);                           
+      109 +                                                              
+      110 +        JLabel hint = new JLabel("※ 비밀번호를 비워두면 기존  
+          +비밀번호를 유지합니다");                                      
+      111 +        hint.setFont(hint.getFont().deriveFont(11f));         
+      112 +        hint.setForeground(Color.GRAY);                       
+      113 +        c.gridy = 6;                                          
+      114 +        c.fill = GridBagConstraints.NONE;                     
+      115 +        c.insets = new Insets(2, 6, 0, 6);                    
+      116 +        form.add(hint, c);                                    
+      117 +                                                              
+      118 +        JPanel buttons = new JPanel();                        
+      119 +        buttons.add(saveButton);                              
+      120 +        buttons.add(backButton);                              
+      121 +        c.gridx = 0;                                          
+      122 +        c.gridy = 7;                                          
+      123 +        c.gridwidth = 3;                                      
+      124 +        c.anchor = GridBagConstraints.CENTER;                 
+      125 +        c.insets = new Insets(16, 6, 0, 6);                   
+      126 +        form.add(buttons, c);                                 
+      127 +                                                              
+      128 +        add(form, new GridBagConstraints());                  
+      129 +        setEditingEnabled(false); // 조회 전에는 수정할 대상이
+          + 없다                                                         
+      130      }
+      131  
+       45 -    /** searchIdField에 입력한 학번으로 회원 1명을 조회하는 요
+          -청이 현재 프로토콜에 없다                                     
+       46 -     *  (POST_LIST처럼 "학번으로 유저 1명 조회"용 RequestType 
+          -이 아직 없음 — 필요하면                                       
+       47 -     *  documents/protocol.md에 새 RequestType을 추가하고 함께
+          - 갱신할 것). */                                               
+      132 +    /** 학번으로 회원 1명을 조회한다 (USER_LOOKUP — 이 화면 때
+          +문에 추가한 관리자 전용 요청). */                             
+      133      private void search() {
+       49 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      134 +        String userId = searchIdField.getText().trim();       
+      135 +        if (userId.isEmpty()) {                               
+      136 +            JOptionPane.showMessageDialog(this, "학번을 입력하
+          +세요.", "조회", JOptionPane.WARNING_MESSAGE);                 
+      137 +            return;                                           
+      138 +        }                                                     
+      139 +        Packet request = Packet.request(RequestType.USER_LOOKU
+          +P, userId);                                                   
+      140 +        Packet response = mainFrame.getConnection().sendReques
+          +t(request);                                                   
+      141 +        if (response.getStatus() == ResponseStatus.OK) {      
+      142 +            editingUser = (User) response.getPayload();       
+      143 +            departmentField.setText(editingUser.getDepartment(
+          +));                                                           
+      144 +            dormitoryCheckBox.setSelected(editingUser.isDormit
+          +ory());                                                       
+      145 +            passwordField.setText(""); // 기존 비밀번호는 화면
+          +에 띄우지 않는다                                              
+      146 +            resultLabel.setText("조회됨: " + editingUser.getId
+          +()                                                            
+      147 +                    + (editingUser.isAdmin() ? " (관리자 계정)
+          +" : ""));                                                     
+      148 +            setEditingEnabled(true);                          
+      149 +        } else {                                              
+      150 +            editingUser = null;                               
+      151 +            resultLabel.setText(" ");                         
+      152 +            setEditingEnabled(false);                         
+      153 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "조회 실패", JOptionPane.ERROR_MESSAGE);        
+      154 +        }                                                     
+      155      }
+      156  
+      157 +    /** 조회에 성공하기 전까지는 수정/저장을 막는다 (save()가 
+          +editingUser를 그대로 쓰기 때문). */                           
+      158 +    private void setEditingEnabled(boolean enabled) {         
+      159 +        departmentField.setEnabled(enabled);                  
+      160 +        dormitoryCheckBox.setEnabled(enabled);                
+      161 +        passwordField.setEnabled(enabled);                    
+      162 +        saveButton.setEnabled(enabled);                       
+      163 +        if (!enabled) {                                       
+      164 +            departmentField.setText("");                      
+      165 +            dormitoryCheckBox.setSelected(false);             
+      166 +            passwordField.setText("");                        
+      167 +        }                                                     
+      168 +    }                                                         
+      169 +                                                              
+      170      private void save() {
+      171          editingUser.setDepartment(departmentField.getText());
+      172          editingUser.setDormitory(dormitoryCheckBox.isSelected(
+           ));
+
+● Now NoticePostEditorPanel — layout, open() prefill, generateId(), and the
+  post-save transition:
+
+● Update(client\GUI\NoticePostEditorPanel.java)
+  ⎿  Added 10 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.BorderLayout;                                  
+       4 +import java.awt.Color;                                         
+       5 +import java.awt.Font;                                          
+       6 +import java.awt.GridBagConstraints;                            
+       7 +import java.awt.GridBagLayout;                                 
+       8 +import java.awt.Insets;                                        
+       9  import java.time.LocalDateTime;
+      10  import java.util.ArrayList;
+      11  import java.util.Arrays;
+      12  import java.util.List;
+      13 +import java.util.UUID;                                         
+      14 +import javax.swing.BorderFactory;                              
+      15  import javax.swing.JButton;
+      16  import javax.swing.JCheckBox;
+      17 +import javax.swing.JLabel;                                     
+      18  import javax.swing.JOptionPane;
+      19  import javax.swing.JPanel;
+      20 +import javax.swing.JScrollPane;                                
+      21  import javax.swing.JTextArea;
+      22  import javax.swing.JTextField;
+      23  
+
+● Update(client\GUI\NoticePostEditorPanel.java)
+  ⎿  Added 84 lines, removed 2 lines
+       36      private final JTextField targetDepartmentsField = new JTex
+           tField(); // 쉼표 구분, 비우면 전체 공지
+       37      private final JCheckBox dormNoticeCheckBox = new JCheckBox
+           ("기숙사 공지");
+       38      private final JButton saveButton = new JButton("저장");
+       39 +    private final JButton cancelButton = new JButton("취소"); 
+       40 +    private final JLabel titleLabel = new JLabel("공지 작성");
+       41      private NoticePost editingPost; // null이면 새 글 작성
+       42  
+       43      public NoticePostEditorPanel(MainFrame mainFrame) {
+       44          this.mainFrame = mainFrame;
+       45          saveButton.addActionListener(e -> save());
+       46 +        cancelButton.addActionListener(e -> mainFrame.switchTo
+          +("admin"));                                                   
+       47          initLayout();
+       48      }
+       49  
+       50      /** 위 필드들을 배치하는 부분 — 디자인은 자유. */
+       51      private void initLayout() {
+       49 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       52 +        setLayout(new BorderLayout(0, 12));                   
+       53 +        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 
+          +32));                                                         
+       54 +                                                              
+       55 +        titleLabel.setFont(titleLabel.getFont().deriveFont(Fon
+          +t.BOLD, 20f));                                                
+       56 +        add(titleLabel, BorderLayout.NORTH);                  
+       57 +                                                              
+       58 +        // 본문(JTextArea)만 남는 공간을 전부 쓰고, 나머지 한 
+          +줄짜리 입력들은 위아래로 붙인다.                              
+       59 +        JPanel head = new JPanel(new GridBagLayout());        
+       60 +        GridBagConstraints c = new GridBagConstraints();      
+       61 +        c.insets = new Insets(4, 4, 4, 4);                    
+       62 +        c.anchor = GridBagConstraints.LINE_END;               
+       63 +        c.gridx = 0;                                          
+       64 +        c.gridy = 0;                                          
+       65 +        head.add(new JLabel("제목"), c);                      
+       66 +                                                              
+       67 +        c.gridx = 1;                                          
+       68 +        c.weightx = 1;                                        
+       69 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       70 +        head.add(titleField, c);                              
+       71 +                                                              
+       72 +        JPanel body = new JPanel(new BorderLayout(0, 6));     
+       73 +        contentArea.setLineWrap(true);                        
+       74 +        contentArea.setWrapStyleWord(true);                   
+       75 +        body.add(new JScrollPane(contentArea), BorderLayout.CE
+          +NTER);                                                        
+       76 +                                                              
+       77 +        JPanel foot = new JPanel(new GridBagLayout());        
+       78 +        GridBagConstraints f = new GridBagConstraints();      
+       79 +        f.insets = new Insets(4, 4, 4, 4);                    
+       80 +        f.anchor = GridBagConstraints.LINE_END;               
+       81 +        f.gridx = 0;                                          
+       82 +        f.gridy = 0;                                          
+       83 +        foot.add(new JLabel("대상 학과"), f);                 
+       84 +                                                              
+       85 +        f.gridx = 1;                                          
+       86 +        f.weightx = 1;                                        
+       87 +        f.fill = GridBagConstraints.HORIZONTAL;               
+       88 +        foot.add(targetDepartmentsField, f);                  
+       89 +                                                              
+       90 +        JLabel hint = new JLabel("※ 쉼표로 여러 학과 지정, 비 
+          +워두면 전체 공지");                                           
+       91 +        hint.setFont(hint.getFont().deriveFont(11f));         
+       92 +        hint.setForeground(Color.GRAY);                       
+       93 +        f.gridy = 1;                                          
+       94 +        f.fill = GridBagConstraints.NONE;                     
+       95 +        f.anchor = GridBagConstraints.LINE_START;             
+       96 +        f.insets = new Insets(0, 4, 8, 4);                    
+       97 +        foot.add(hint, f);                                    
+       98 +                                                              
+       99 +        f.gridy = 2;                                          
+      100 +        f.insets = new Insets(0, 4, 4, 4);                    
+      101 +        foot.add(dormNoticeCheckBox, f);                      
+      102 +                                                              
+      103 +        JPanel buttons = new JPanel();                        
+      104 +        buttons.add(saveButton);                              
+      105 +        buttons.add(cancelButton);                            
+      106 +        f.gridx = 0;                                          
+      107 +        f.gridy = 3;                                          
+      108 +        f.gridwidth = 2;                                      
+      109 +        f.anchor = GridBagConstraints.CENTER;                 
+      110 +        f.insets = new Insets(10, 4, 0, 4);                   
+      111 +        foot.add(buttons, f);                                 
+      112 +                                                              
+      113 +        body.add(head, BorderLayout.NORTH);                   
+      114 +        body.add(foot, BorderLayout.SOUTH);                   
+      115 +        add(body, BorderLayout.CENTER);                       
+      116      }
+      117  
+      118      /** mainFrame.switchTo("noticePostEditor") 전에 반드시 먼
+           저 호출한다. existingPost가 null이면 새 글 작성. */
+      119      public void open(NoticePost existingPost) {
+      120          this.editingPost = existingPost;
+       55 -        // TODO: 구현 필요. existingPost != null이면 필드들에 
+          -기존 값을 채운다.                                             
+      121 +        if (existingPost == null) {                           
+      122 +            // 새 글: 이전에 열어둔 공지의 값이 남아있지 않도 
+          +록 전부 비운다.                                               
+      123 +            titleLabel.setText("공지 작성");                  
+      124 +            titleField.setText("");                           
+      125 +            contentArea.setText("");                          
+      126 +            targetDepartmentsField.setText("");               
+      127 +            dormNoticeCheckBox.setSelected(false);            
+      128 +        } else {                                              
+      129 +            titleLabel.setText("공지 수정");                  
+      130 +            titleField.setText(existingPost.getTitle());      
+      131 +            contentArea.setText(existingPost.getContent());   
+      132 +            targetDepartmentsField.setText(String.join(",", ex
+          +istingPost.getTargetDepartments()));                          
+      133 +            dormNoticeCheckBox.setSelected(existingPost.isDorm
+          +Notice());                                                    
+      134 +        }                                                     
+      135 +        // 대상 학과/기숙사 여부는 NoticePost에서 final이라 수
+          +정 시에는 반영되지 않는다 (아래 save() 주석 참고).            
+      136 +        targetDepartmentsField.setEnabled(existingPost == null
+          +);                                                            
+      137 +        dormNoticeCheckBox.setEnabled(existingPost == null);  
+      138      }
+      139  
+      140      private void save() {
+● Update(client\GUI\NoticePostEditorPanel.java)
+  ⎿  Added 10 lines, removed 3 lines
+      155          Packet request = Packet.request(type, new PostCreateOr
+           UpdateRequest(BoardKey.NOTICE, post));
+      156          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+      157          if (response.getStatus() == ResponseStatus.OK) {
+      158 -            // TODO: 구현 필요. 예: mainFrame.switchTo("postLi
+          -st");                                                         
+      158 +            // 저장 결과를 바로 확인할 수 있게 공지 목록으로  
+          +보낸다.                                                       
+      159 +            // 관리자가 열었으므로 뒤로가기 대상은 학생 화면이
+          + 아니라 "admin".                                              
+      160 +            ((PostListPanel) mainFrame.getScreen("postList")).
+          +open(BoardKey.NOTICE, "admin");                               
+      161 +            mainFrame.switchTo("postList");                   
+      162          } else {
+      163              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "저장 실패", JOptionPane.ERROR_MESSAGE);
+      164          }
+      165      }
+      166  
+      164 -    /** 새 글의 id를 어떻게 채번할지 아직 팀 논의가 없었다(UUI
+          -D vs 다른 규칙). */                                           
+      167 +    /**                                                       
+      168 +     * 게시글 id 채번 규칙. 여러 클라이언트가 각자 만들어도 겹
+          +치지 않아야 해서 UUID를 쓴다                                  
+      169 +     * (서버는 중복 id를 거부하므로 겹치면 저장 자체가 실패한 
+          +다).                                                          
+      170 +     * 다른 에디터(PostEditorPanel/GroupBuyPostEditorPanel/Com
+          +plaintPanel)도 같은 규칙으로 통일할 것.                       
+      171 +     */                                                       
+      172      private String generateId() {
+      166 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      173 +        return UUID.randomUUID().toString();                  
+      174      }
+      175  }
+
+● Update(client\GUI\NoticePostEditorPanel.java)
+  ⎿  Added 3 lines, removed 1 line
+      132              targetDepartmentsField.setText(String.join(",", ex
+           istingPost.getTargetDepartments()));
+      133              dormNoticeCheckBox.setSelected(existingPost.isDorm
+           Notice());
+      134          }
+      135 -        // 대상 학과/기숙사 여부는 NoticePost에서 final이라 수
+          -정 시에는 반영되지 않는다 (아래 save() 주석 참고).            
+      135 +        // 수정할 때는 대상 범위를 바꿀 수 없어서 아예 비활성 
+          +화한다:                                                       
+      136 +        // dormNotice는 NoticePost에서 final이고, 서버의 POST_
+          +UPDATE도 제목/내용/첨부만 반영한다.                           
+      137 +        // 대상 범위를 바꾸려면 공지를 지우고 다시 작성해야 한
+          +다.                                                           
+      138          targetDepartmentsField.setEnabled(existingPost == null
+           );
+      139          dormNoticeCheckBox.setEnabled(existingPost == null);
+      140      }
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now verifying with a live harness. Note one dependency up front:
+  NoticePostEditorPanel.save() navigates to postList, whose renderPosts() is
+  still TODO — so I'll check whether the save request itself lands on the
+  server.
+
+  Made 1 scratchpad edit +268, ran 3 shell commands (ctrl+o to expand)
+
+● All 17 checks pass. The stack trace is the expected postList dependency (my
+  harness didn't register that screen). Checking the layouts:
+
+  Read 4 files, ran 1 shell command (ctrl+o to expand)
+
+● 관리자 화면 3종 실제 실행 캡처 (관리자 메뉴 / 회원정보 수정-조회완료 / 공지
+  수정모드)
+
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (13.9K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\adm-1-menu.png    B)
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (14.5K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\adm-4-useredit-fouB)
+          nd.png
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (13.3K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\adm-8-notice-edit.B)
+          png
+
+● Background command "Start test server" failed with exit code 127
+
+● 관리자 화면 3종 구현했습니다. 프로토콜에 없던 조회 요청도 추가했습니다.
+
+  프로토콜 추가 — USER_LOOKUP
+
+  학번으로 회원 1명을 조회하는 요청이 정말 없어서 새로 넣었습니다. User에는
+  비밀번호가 들어 있어서 관리자 전용으로 막았습니다.
+
+  - RequestType.USER_LOOKUP — 요청 String(학번) → 응답 model.User
+  - ClientHandler.handleUserLookup() — requireAdmin() 후 조회. 조회 전용이라
+  SYNCHRONIZED_TYPES에는 넣지 않았습니다(POST_LIST와 같은 취급)
+  - documents/protocol.md 요청/응답 표에 행 추가
+
+  AdminPanel
+
+  openWriteNotice()와 openComplaintInbox()는 이미 스켈레톤에 구현돼 있었습니다.
+  실제로 비어 있던 건 셋입니다:
+
+  - initLayout() — 세로 버튼 메뉴. 로그인한 관리자 이름은 표시하지 않았습니다 —
+  initLayout은 생성자에서(=로그인 전에) 도는데 getCurrentUser()가 그 시점엔
+  null이라 NPE가 납니다
+  - openPostManagement() — 게시판 선택 다이얼로그. 5개 고정 게시판은 BoardKey.*
+  상수를 쓰고(하드코딩 아님), 학과 게시판은 학과가 늘어날 수 있어 직접 
+  입력받습니다. 민원함은 전용 버튼이 있어 목록에서 뺐습니다. backTarget은 항상
+  "admin"
+  - logout() — LOGOUT 요청 → setCurrentUser(null) → login 화면
+
+  UserEditPanel
+
+  search()가 USER_LOOKUP을 씁니다. 조회 성공 시 학과/기숙사 여부를 채우고
+  비밀번호 칸은 항상 비웁니다(기존 비밀번호를 화면에 띄우지 않음 — save()가 빈
+  칸이면 기존 값을 유지하도록 이미 짜여 있습니다).
+
+  save()가 editingUser를 바로 쓰기 때문에 조회 전에 저장을 누르면 NPE가 납니다.
+  save() 본문은 고정 영역이라 건드리지 않고, 대신 조회 성공 전까지 입력칸과 저장
+  버튼을 비활성화해서 막았습니다.
+
+  NoticePostEditorPanel
+
+  - generateId() → UUID.randomUUID().toString(). 여러 클라이언트가 각자 채번해도
+  겹치지 않고, 겹쳐도 서버가 중복 id를 거부합니다. 다른 에디터 3개도 같은 
+  규칙으로 통일하는 게 좋습니다
+  - open() — 새 글이면 전부 비우고(이전 공지 값이 남지 않도록), 수정이면
+  채웁니다
+  - 수정 모드에서는 대상 학과/기숙사 공지를 잠갔습니다. dormNotice가
+  NoticePost에서 final이고, 서버의 POST_UPDATE도 제목/내용/첨부만 반영하기
+  때문입니다 — 열어두면 바꿔도 저장이 안 되는 칸이 됩니다. 대상 범위를 바꾸려면
+  지우고 다시 작성해야 합니다
+  - 저장 성공 → 공지 목록(postList, backTarget "admin")으로 이동
+
+  요청 범위에서 추가한 것
+
+  UserEditPanel의 관리자 홈, NoticePostEditorPanel의 취소 버튼 — 두 화면 모두
+  스켈레톤에 돌아갈 수단이 없었습니다.
+
+  검증 (17개 전부 통과)
+
+  관리자로 로그인해 실제 창을 띄우고 버튼을 눌러 확인했습니다.
+
+  ┌────────────────────────────┬────────────────────────────────────────────┐
+  │            확인            │                    결과                    │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 화면 3종 생성              │ initLayout 예외 없음                       │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 조회 전 저장 잠금 → 조회   │ 확인                                       │
+  │ 후 해제                    │                                            │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 학과 변경 후 저장          │ 서버에 반영됨(재조회로 확인)               │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 없는 학번 조회             │ 실패 다이얼로그 + 저장 다시 잠김           │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 일반 유저의 USER_LOOKUP    │ 거부됨 ("관리자만 사용할 수 있는           │
+  │                            │ 기능입니다")                               │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 공지 작성                  │ 서버 저장 확인, id가 UUID 형식, 대상 학과  │
+  │                            │ 전달 확인                                  │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 공지 수정 모드             │ 기존 값 채워짐, 대상 학과 잠김             │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ 로그아웃                   │ currentUser 비워지고 이후 서버 요청 거부됨 │
+  └────────────────────────────┴────────────────────────────────────────────┘
+
+  알아두실 점
+
+  공지 저장 후 화면 전환은 PostListPanel이 완성돼야 동작합니다. renderPosts()가
+  아직 TODO라 지금은 저장까지만 되고 목록으로 넘어가는 지점에서 예외가
+  납니다(저장 자체는 성공하는 걸 확인했습니다). 같은 이유로 AdminPanel의 게시글 
+  관리/민원함 버튼도 목록 화면에서 걸립니다 — 이 둘은 원래 스켈레톤에 있던
+  코드입니다. PostListPanel 먼저 하시겠어요?
+
+✻ Churned for 6m 43s
+
+❯ 민원 (client/GUI/)                                                            
+  - ComplaintPanel.java — initLayout, 제출 후 안내, openMyComplaints(),         
+  generateId()                                                                  
+                                                                                
+  나머지 접착부 (HomePanel.java)                                                
+  - initLayout — 홈 화면 레이아웃(관리자 버튼은                                 
+  mainFrame.getCurrentUser().isAdmin()일 때만 보이게)                           
+  - openComplaint(), openAdmin(), logout() — 위 세 덩어리를 만든 뒤 여기서 연결 
+
+  Read 2 files (ctrl+o to expand)
+
+● HomePanel은 세션 중에 갱신돼서 adminButton이 없어졌습니다 (javadoc이 "학생
+  전용 — 관리자는 이 화면에 오지 않는다"로 바뀜). 아래에서 정리해 드리고, 우선
+  구현하겠습니다.
+
+● Update(client\GUI\ComplaintPanel.java)
+  ⎿  Added 10 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.BorderLayout;                                  
+       4 +import java.awt.Color;                                         
+       5 +import java.awt.Font;                                          
+       6 +import java.awt.GridBagConstraints;                            
+       7 +import java.awt.GridBagLayout;                                 
+       8 +import java.awt.Insets;                                        
+       9  import java.time.LocalDateTime;
+      10 +import java.util.UUID;                                         
+      11 +import javax.swing.BorderFactory;                              
+      12  import javax.swing.JButton;
+      13 +import javax.swing.JLabel;                                     
+      14  import javax.swing.JOptionPane;
+      15  import javax.swing.JPanel;
+      16 +import javax.swing.JScrollPane;                                
+      17  import javax.swing.JTextArea;
+      18  import javax.swing.JTextField;
+      19  
+
+● Update(client\GUI\ComplaintPanel.java)
+  ⎿  Added 58 lines, removed 1 line
+       45  
+       46      /** 위 필드들을 배치하는 부분 — 디자인은 자유. */
+       47      private void initLayout() {
+       48 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       48 +        setLayout(new BorderLayout(0, 12));                   
+       49 +        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 
+          +32));                                                         
+       50 +                                                              
+       51 +        JLabel title = new JLabel("민원 접수");               
+       52 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 20
+          +f));                                                          
+       53 +        add(title, BorderLayout.NORTH);                       
+       54 +                                                              
+       55 +        // 한 줄짜리 입력들은 위에 모으고, 내용(JTextArea)이  
+          +남는 공간을 전부 쓰게 한다.                                   
+       56 +        JPanel head = new JPanel(new GridBagLayout());        
+       57 +        GridBagConstraints c = new GridBagConstraints();      
+       58 +        c.insets = new Insets(4, 4, 4, 4);                    
+       59 +                                                              
+       60 +        c.gridx = 0;                                          
+       61 +        c.gridy = 0;                                          
+       62 +        c.anchor = GridBagConstraints.LINE_END;               
+       63 +        head.add(new JLabel("제목"), c);                      
+       64 +        c.gridy = 1;                                          
+       65 +        head.add(new JLabel("문의 분류"), c);                 
+       66 +                                                              
+       67 +        c.gridx = 1;                                          
+       68 +        c.gridy = 0;                                          
+       69 +        c.gridwidth = 3;                                      
+       70 +        c.weightx = 1;                                        
+       71 +        c.anchor = GridBagConstraints.LINE_START;             
+       72 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       73 +        head.add(titleField, c);                              
+       74 +                                                              
+       75 +        // 1차/2차 카테고리는 한 줄에 나란히                  
+       76 +        c.gridy = 1;                                          
+       77 +        c.gridwidth = 1;                                      
+       78 +        c.weightx = 0.5;                                      
+       79 +        head.add(category1Field, c);                          
+       80 +        c.gridx = 2;                                          
+       81 +        head.add(category2Field, c);                          
+       82 +                                                              
+       83 +        JLabel hint = new JLabel("※ 1차 · 2차 분류 순서로 입력
+          + (예: 시설 / 냉난방)");                                       
+       84 +        hint.setFont(hint.getFont().deriveFont(11f));         
+       85 +        hint.setForeground(Color.GRAY);                       
+       86 +        c.gridx = 1;                                          
+       87 +        c.gridy = 2;                                          
+       88 +        c.gridwidth = 3;                                      
+       89 +        c.fill = GridBagConstraints.NONE;                     
+       90 +        c.insets = new Insets(0, 4, 8, 4);                    
+       91 +        head.add(hint, c);                                    
+       92 +                                                              
+       93 +        JPanel body = new JPanel(new BorderLayout(0, 6));     
+       94 +        contentArea.setLineWrap(true);                        
+       95 +        contentArea.setWrapStyleWord(true);                   
+       96 +        body.add(head, BorderLayout.NORTH);                   
+       97 +        body.add(new JScrollPane(contentArea), BorderLayout.CE
+          +NTER);                                                        
+       98 +                                                              
+       99 +        JPanel buttons = new JPanel();                        
+      100 +        buttons.add(submitButton);                            
+      101 +        buttons.add(myComplaintsButton);                      
+      102 +        buttons.add(backButton);                              
+      103 +        body.add(buttons, BorderLayout.SOUTH);                
+      104 +                                                              
+      105 +        add(body, BorderLayout.CENTER);                       
+      106      }
+      107  
+      108      private void submit() {
+
+● Update(client\GUI\ComplaintPanel.java)
+  ⎿  Added 16 lines, removed 4 lines
+      112          Packet request = Packet.request(RequestType.POST_CREAT
+           E, new PostCreateOrUpdateRequest(BoardKey.COMPLAINT, post));
+      113          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+      114          if (response.getStatus() == ResponseStatus.OK) {
+      115 -            // TODO: 구현 필요. 예: JOptionPane.showMessageDia
+          -log(this, "접수되었습니다.");                                 
+      115 +            JOptionPane.showMessageDialog(this,               
+      116 +                    "접수되었습니다. 답변이 등록되면 '내 문의 
+          +내역'에서 확인할 수 있습니다.",                               
+      117 +                    "민원 접수 완료", JOptionPane.INFORMATION_
+          +MESSAGE);                                                     
+      118 +            clearFields(); // 다음 민원을 쓸 때 앞 내용이 남아
+          +있지 않도록                                                   
+      119          } else {
+      120              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "제출 실패", JOptionPane.ERROR_MESSAGE);
+      121          }
+      122      }
+      123  
+      124 +    private void clearFields() {                              
+      125 +        titleField.setText("");                               
+      126 +        category1Field.setText("");                           
+      127 +        category2Field.setText("");                           
+      128 +        contentArea.setText("");                              
+      129 +    }                                                         
+      130 +                                                              
+      131      /** ((PostListPanel) mainFrame.getScreen("postList")).open
+           (BoardKey.COMPLAINT, "home") 후 switchTo("postList"). */
+      132      private void openMyComplaints() {
+      123 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      133 +        // 서버가 일반 유저에게는 본인이 넣은 민원만 돌려주므 
+          +로 목록 화면을 그대로 재사용한다.                             
+      134 +        ((PostListPanel) mainFrame.getScreen("postList")).open
+          +(BoardKey.COMPLAINT, "home");                                 
+      135 +        mainFrame.switchTo("postList");                       
+      136      }
+      137  
+      126 -    /** 새 글의 id를 어떻게 채번할지 아직 팀 논의가 없었다(UUI
+          -D vs 다른 규칙). */                                           
+      138 +    /** 게시글 id 채번 규칙 — NoticePostEditorPanel과 동일하게
+          + UUID를 쓴다(서버가 중복 id는 거부). */                       
+      139      private String generateId() {
+      128 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      140 +        return UUID.randomUUID().toString();                  
+      141      }
+      142  }
+
+● Now HomePanel — initLayout, openComplaint(), logout():
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 12 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Dimension;                                     
+       4 +import java.awt.Font;                                          
+       5 +import java.awt.GridBagConstraints;                            
+       6 +import java.awt.GridBagLayout;                                 
+       7 +import java.awt.Insets;                                        
+       8 +import javax.swing.BorderFactory;                              
+       9  import javax.swing.JButton;
+      10 +import javax.swing.JOptionPane;                                
+      11  import javax.swing.JPanel;
+      12 +import javax.swing.JLabel;                                     
+      13  
+      14 +import model.protocol.Packet;                                  
+      15 +import model.protocol.RequestType;                             
+      16 +import model.protocol.ResponseStatus;                          
+      17 +                                                               
+      18  /**
+      19   * 로그인 성공 후 첫 화면(학생 전용 — 관리자는 이 화면에 오지 
+          않고 "admin"으로 바로 간다).
+      20   * 게시판 6종/채팅방/추천/로그아웃으로 가는 허브. 서버 통신은 
+          없고 순수 네비게이션만 담당한다 —
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 44 lines, removed 1 line
+      50  
+      51      /** 위 버튼들을 배치하는 부분 — 디자인은 자유. */
+      52      private void initLayout() {
+      53 -        throw new UnsupportedOperationException("TODO: 구현 필 
+         -요");                                                          
+      53 +        setLayout(new GridBagLayout());                        
+      54 +        JPanel menu = new JPanel(new GridBagLayout());         
+      55 +        menu.setBorder(BorderFactory.createEmptyBorder(24, 32, 
+         +24, 32));                                                      
+      56 +                                                               
+      57 +        GridBagConstraints c = new GridBagConstraints();       
+      58 +                                                               
+      59 +        JLabel title = new JLabel("TUK Community");            
+      60 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22f
+         +));                                                            
+      61 +        c.gridx = 0;                                           
+      62 +        c.gridy = 0;                                           
+      63 +        c.gridwidth = 2;                                       
+      64 +        c.anchor = GridBagConstraints.CENTER;                  
+      65 +        c.insets = new Insets(6, 6, 20, 6);                    
+      66 +        menu.add(title, c);                                    
+      67 +        // 관리자 버튼은 없다 — 관리자는 로그인 직후 "admin"으 
+         +로 가고 이 화면에 오지 않는다                                  
+      68 +        // (documents/gui.md §2 학생/관리자 완전 분리). 또 init
+         +Layout은 생성자에서(=로그인 전에)                              
+      69 +        // 돌기 때문에 여기서 getCurrentUser()를 보면 null이다.
+      70 +                                                               
+      71 +        // 게시판 6종을 2열로, 그 아래 채팅방/추천, 맨 아래 로 
+         +그아웃.                                                        
+      72 +        c.gridwidth = 1;                                       
+      73 +        c.insets = new Insets(4, 4, 4, 4);                     
+      74 +        c.fill = GridBagConstraints.HORIZONTAL;                
+      75 +        JButton[] buttons = {                                  
+      76 +                freeBoardButton, groupBuyBoardButton,          
+      77 +                departmentBoardButton, dormBoardButton,        
+      78 +                noticeBoardButton, complaintButton,            
+      79 +                chatRoomListButton, recommendButton };         
+      80 +        for (int i = 0; i < buttons.length; i++) {             
+      81 +            buttons[i].setPreferredSize(new Dimension(160, 44))
+         +;                                                              
+      82 +            c.gridx = i % 2;                                   
+      83 +            c.gridy = 1 + i / 2;                               
+      84 +            menu.add(buttons[i], c);                           
+      85 +        }                                                      
+      86 +                                                               
+      87 +        logoutButton.setPreferredSize(new Dimension(160, 32)); 
+      88 +        c.gridx = 0;                                           
+      89 +        c.gridy = 1 + buttons.length / 2;                      
+      90 +        c.gridwidth = 2;                                       
+      91 +        c.fill = GridBagConstraints.NONE;                      
+      92 +        c.anchor = GridBagConstraints.CENTER;                  
+      93 +        c.insets = new Insets(20, 4, 4, 4);                    
+      94 +        menu.add(logoutButton, c);                             
+      95 +                                                               
+      96 +        add(menu, new GridBagConstraints());                   
+      97      }
+      98  
+      99      private void openFreeBoard() {
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 2 lines, removed 1 line
+      117      }
+      118  
+      119      private void openComplaint() {
+      120 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      120 +        // ComplaintPanel은 넘겨줄 데이터가 없어서 open(...)  
+          +없이 바로 전환한다.                                           
+      121 +        mainFrame.switchTo("complaint");                      
+      122      }
+      123  
+      124      private void openChatRoomList() {
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 8 lines, removed 1 line
+      130      }
+      131  
+      132      private void logout() {
+      133 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      133 +        Packet response = mainFrame.getConnection().sendReques
+          +t(Packet.request(RequestType.LOGOUT, null));                  
+      134 +        if (response.getStatus() != ResponseStatus.OK) {      
+      135 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "로그아웃 실패", JOptionPane.ERROR_MESSAGE);    
+      136 +            return;                                           
+      137 +        }                                                     
+      138 +        // 서버 세션이 끊겼으므로 클라이언트가 들고 있던 유저 
+          +도 함께 비운다 (AdminPanel.logout과 동일).                    
+      139 +        mainFrame.setCurrentUser(null);                       
+      140 +        mainFrame.switchTo("login");                          
+      141      }
+      142  }
+
+  Made 1 scratchpad edit +181, read 2 files, ran 5 shell commands (ctrl+o to expand)
+
+● Background command "Start test server" failed with exit code 127
+● 학생 홈 화면 / 민원 접수 화면 (실제 실행 캡처)
+
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (19.8K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\stu-1-home.png    B)
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (15.5K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\stu-2-complaint.pnB)
+          g
+
+● 민원 화면과 홈 화면 구현했습니다.
+
+  ComplaintPanel (4곳 전부)
+
+  - initLayout() — 제목 / 문의 분류(1차·2차 나란히) / 내용은 남는 공간 전부 +
+  하단 버튼 3개
+  - 제출 후 안내 — "접수되었습니다. 답변이 등록되면 '내 문의 내역'에서 확인할 수
+  있습니다." 다이얼로그 후 입력칸을 비웁니다(안 비우면 다음 민원 쓸 때 앞
+  내용이 그대로 남습니다). 화면은 민원 화면에 그대로 둡니다
+  - openMyComplaints() — PostListPanel.open(BoardKey.COMPLAINT, "home") +
+  switchTo("postList"). 서버가 일반 유저에게는 본인 민원만 돌려주므로 목록
+  화면을 그대로 재사용합니다
+  - generateId() — UUID.randomUUID().toString() (NoticePostEditorPanel과 동일
+  규칙)
+
+  HomePanel — 요청 내용과 코드가 어긋난 부분
+
+  adminButton이 지금 코드에 없습니다. 이 세션 중에 HomePanel이 갱신되면서 관리자
+  버튼이 제거됐고, javadoc도 "학생 전용 — 관리자는 이 화면에 오지 않고
+  admin으로 바로 간다"로 바뀌었습니다(gui.md §2의 학생/관리자 완전 분리). 그래서
+  openAdmin()도 존재하지 않습니다.
+
+  설령 버튼이 있었어도 initLayout()에서 getCurrentUser().isAdmin()은 못 씁니다 —
+  initLayout은 생성자에서, 즉 로그인 전에 돌기 때문에 getCurrentUser()가
+  null이라 NPE입니다. 그 경우엔 화면에 들어올 때마다 갱신하는 방식(setVisible
+  오버라이드 등)이 필요합니다. 지금은 관리자가 이 화면에 아예 안 오므로
+  불필요합니다.
+
+  구현한 것:
+  - initLayout() — 게시판 6종 + 채팅방/추천을 2열로, 아래 로그아웃
+  - openComplaint() — switchTo("complaint")
+  - logout() — LOGOUT 요청 → setCurrentUser(null) → login (AdminPanel.logout과
+  동일)
+
+  검증 (11개 전부 통과)
+
+  학생 계정으로 실제 창을 띄워 버튼을 눌렀습니다.
+
+  ┌──────────────┬──────────────────────────────────────────────────────────┐
+  │     확인     │                           결과                           │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 두 화면 생성 │ initLayout 예외 없음                                     │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 홈 → 민원    │ 확인                                                     │
+  │ 이동         │                                                          │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 민원 제출    │ 서버 저장 확인, id UUID 형식, 카테고리 2종 전달, 접수    │
+  │              │ 직후 답변 대기 상태                                      │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 제출 후      │ 비워짐                                                   │
+  │ 입력칸       │                                                          │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 내 민원만    │ 남의 민원이 목록에 없음                                  │
+  │ 조회         │                                                          │
+  ├──────────────┼──────────────────────────────────────────────────────────┤
+  │ 로그아웃     │ currentUser 비워지고 이후 서버 요청 거부                 │
+  └──────────────┴──────────────────────────────────────────────────────────┘
+
+  남은 것
+
+  HomePanel의 나머지 버튼 6개(openFreeBoard, openGroupBuyBoard,
+  openDepartmentBoard, openDormBoard, openNoticeBoard, openChatRoomList,
+  openRecommend)는 아직 UnsupportedOperationException 입니다. 요청하신 목록에
+  없어서 손대지 않았는데, 각각 두 줄이면 연결됩니다 — 다만 지금 연결해도 대상
+  화면(PostListPanel·ChatRoomListPanel·RecommendPanel)이 미완성이라 눌렀을 때
+  거기서 걸립니다.
+
+  PostListPanel이 지금 최대 병목입니다. 민원 "내 문의 내역", 공지 저장 후 이동,
+  관리자 게시글 관리/민원함이 전부 이 화면 하나를 거칩니다. 다음으로 진행할까요?
+
+✻ Cooked for 3m 50s
+
+❯ 구현해                                                                        
+
+● Update(client\GUI\PostListPanel.java)
+  ⎿  Added 16 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.BorderLayout;                                  
+       4 +import java.awt.Component;                                     
+       5 +import java.awt.Font;                                          
+       6 +import java.awt.event.MouseAdapter;                            
+       7 +import java.awt.event.MouseEvent;                              
+       8 +import java.time.format.DateTimeFormatter;                     
+       9  import java.util.List;
+      10 +import javax.swing.BorderFactory;                              
+      11 +import javax.swing.DefaultListCellRenderer;                    
+      12 +import javax.swing.DefaultListModel;                           
+      13  import javax.swing.JButton;
+      14 +import javax.swing.JLabel;                                     
+      15 +import javax.swing.JList;                                      
+      16  import javax.swing.JOptionPane;
+      17  import javax.swing.JPanel;
+      18 +import javax.swing.JScrollPane;                                
+      19 +import javax.swing.ListSelectionModel;                         
+      20  
+      21 +import model.boards.ComplaintPost;                             
+      22 +import model.boards.GroupBuyPost;                              
+      23  import model.boards.Post;
+      24 +import model.protocol.BoardKey;                                
+      25  import model.protocol.Packet;
+      26  import model.protocol.RequestType;
+      27  import model.protocol.ResponseStatus;
+
+● Update(client\GUI\PostListPanel.java)
+  ⎿  Added 7 lines
+      33  @SuppressWarnings("unchecked")
+      34  public class PostListPanel extends JPanel {
+      35      private final MainFrame mainFrame;
+      36 +    private static final DateTimeFormatter DISPLAY_TIME = DateT
+         +imeFormatter.ofPattern("yyyy-MM-dd HH:mm");                    
+      37 +                                                               
+      38      private final JButton newPostButton = new JButton("글쓰기")
+          ;
+      39 +    private final JButton openButton = new JButton("열기");    
+      40      private final JButton backButton = new JButton("뒤로");
+      41 +    private final JLabel headerLabel = new JLabel();           
+      42 +    private final DefaultListModel<Post> listModel = new Defaul
+         +tListModel<>();                                                
+      43 +    private final JList<Post> postJList = new JList<>(listModel
+         +);                                                             
+      44      private String boardKey;
+      45      private String backTarget;
+      46      private List<Post> posts;
+     ...
+      48      public PostListPanel(MainFrame mainFrame) {
+      49          this.mainFrame = mainFrame;
+      50          newPostButton.addActionListener(e -> openEditor());
+      51 +        openButton.addActionListener(e -> openSelectedPost()); 
+      52          backButton.addActionListener(e -> mainFrame.switchTo(ba
+          ckTarget));
+      53          initLayout();
+      54      }
+
+● Update(client\GUI\PostListPanel.java)
+  ⎿  Added 46 lines, removed 1 line
+       57       *  관리자가 게시글 관리/민원함 목적으로 연 경우(backTarge
+           t이 "admin")는 글쓰기가
+       58       *  학생 행위이므로 newPostButton을 숨기거나 비활성화할 것
+           . */
+       59      private void initLayout() {
+       60 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       60 +        setLayout(new BorderLayout(0, 12));                   
+       61 +        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 
+          +32));                                                         
+       62 +                                                              
+       63 +        headerLabel.setFont(headerLabel.getFont().deriveFont(F
+          +ont.BOLD, 20f));                                              
+       64 +        add(headerLabel, BorderLayout.NORTH);                 
+       65 +                                                              
+       66 +        postJList.setSelectionMode(ListSelectionModel.SINGLE_S
+          +ELECTION);                                                    
+       67 +        postJList.setCellRenderer(new PostRenderer());        
+       68 +        postJList.setFixedCellHeight(28);                     
+       69 +        postJList.addMouseListener(new MouseAdapter() {       
+       70 +            @Override                                         
+       71 +            public void mouseClicked(MouseEvent e) {          
+       72 +                if (e.getClickCount() == 2) { // 더블클릭으로 
+          +도 열 수 있게                                                 
+       73 +                    openSelectedPost();                       
+       74 +                }                                             
+       75 +            }                                                 
+       76 +        });                                                   
+       77 +        add(new JScrollPane(postJList), BorderLayout.CENTER); 
+       78 +                                                              
+       79 +        JPanel buttons = new JPanel();                        
+       80 +        buttons.add(openButton);                              
+       81 +        buttons.add(newPostButton);                           
+       82 +        buttons.add(backButton);                              
+       83 +        add(buttons, BorderLayout.SOUTH);                     
+       84      }
+       85  
+       86 +    /** 목록 한 줄의 표시 형식: 제목 · 작성자 · 작성시각 · 댓 
+          +글 수 (+ 게시글 타입별 표시) */                               
+       87 +    private static class PostRenderer extends DefaultListCellR
+          +enderer {                                                     
+       88 +        @Override                                             
+       89 +        public Component getListCellRendererComponent(JList<?>
+          + list, Object value, int index,                               
+       90 +                                                       boolean
+          + isSelected, boolean cellHasFocus) {                          
+       91 +            Post post = (Post) value;                         
+       92 +            StringBuilder line = new StringBuilder();         
+       93 +            if (post instanceof ComplaintPost) {              
+       94 +                line.append(((ComplaintPost) post).isAnswered(
+          +) ? "[답변완료] " : "[답변대기] ");                           
+       95 +            } else if (post instanceof GroupBuyPost) {        
+       96 +                line.append("[최대 ").append(((GroupBuyPost) p
+          +ost).getMaxMembers()).append("명] ");                         
+       97 +            }                                                 
+       98 +            line.append(post.getTitle())                      
+       99 +                    .append("   ·   ").append(post.getAuthorId
+          +())                                                           
+      100 +                    .append("   ·   ").append(post.getCreatedA
+          +t().format(DISPLAY_TIME));                                    
+      101 +            if (!post.getComments().isEmpty()) {              
+      102 +                line.append("   ·   댓글 ").append(post.getCom
+          +ments().size());                                              
+      103 +            }                                                 
+      104 +            return super.getListCellRendererComponent(list, li
+          +ne.toString(), index, isSelected, cellHasFocus);              
+      105 +        }                                                     
+      106 +    }                                                         
+      107 +                                                              
+      108      /** mainFrame.switchTo("postList") 전에 반드시 먼저 호출해
+           서 어느 게시판을 보여줄지 지정한다.
+      109       *  backTarget은 뒤로가기를 눌렀을 때 돌아갈 화면 이름 — 
+           학생이 열 때는 "home", 관리자가
+      110       *  게시글 관리/민원함으로 열 때는 "admin"을 넘긴다 (관리
+           자가 학생 화면에 갇히지 않도록). */
+
+● Update(client\GUI\PostListPanel.java)
+  ⎿  Added 55 lines, removed 2 lines
+      124      /** posts를 화면에 그리고, 항목을 클릭하면
+      125       *  ((PostDetailPanel) mainFrame.getScreen("postDetail")).
+           open(boardKey, post) 후 switchTo("postDetail") — 렌더링은 자유
+           . */
+      126      private void renderPosts() {
+      127 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      127 +        headerLabel.setText(boardTitle(boardKey) + " (" + post
+          +s.size() + ")");                                              
+      128 +        listModel.clear();                                    
+      129 +        for (Post post : posts) {                             
+      130 +            listModel.addElement(post);                       
+      131 +        }                                                     
+      132 +        postJList.clearSelection();                           
+      133 +                                                              
+      134 +        // 글쓰기가 맞지 않는 상황에서는 버튼을 숨긴다:       
+      135 +        // - 관리자가 관리 목적으로 연 목록(backTarget이 "admi
+          +n") — 글쓰기는 학생 행위                                      
+      136 +        // - 공지: 작성은 관리자 화면에서, 민원: 접수는 Compla
+          +intPanel에서 한다                                             
+      137 +        boolean adminView = "admin".equals(backTarget);       
+      138 +        boolean writtenElsewhere = BoardKey.NOTICE.equals(boar
+          +dKey) || BoardKey.COMPLAINT.equals(boardKey);                 
+      139 +        newPostButton.setVisible(!adminView && !writtenElsewhe
+          +re);                                                          
+      140      }
+      141  
+      142 +    /** 선택한 글을 상세 화면으로 넘긴다 (열기 버튼 / 목록 더 
+          +블클릭 공용). */                                              
+      143 +    private void openSelectedPost() {                         
+      144 +        Post selected = postJList.getSelectedValue();         
+      145 +        if (selected == null) {                               
+      146 +            JOptionPane.showMessageDialog(this, "글을 먼저 선 
+          +택하세요.", "열기", JOptionPane.WARNING_MESSAGE);             
+      147 +            return;                                           
+      148 +        }                                                     
+      149 +        ((PostDetailPanel) mainFrame.getScreen("postDetail")).
+          +open(boardKey, selected);                                     
+      150 +        mainFrame.switchTo("postDetail");                     
+      151 +    }                                                         
+      152 +                                                              
+      153      /** boardKey에 맞는 편집 화면(postEditor/groupBuyPostEdito
+           r/noticePostEditor)을 열고 전환. */
+      154      private void openEditor() {
+      132 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      155 +        if (BoardKey.GROUP_BUY.equals(boardKey)) {            
+      156 +            ((GroupBuyPostEditorPanel) mainFrame.getScreen("gr
+          +oupBuyPostEditor")).open(null);                               
+      157 +            mainFrame.switchTo("groupBuyPostEditor");         
+      158 +        } else if (BoardKey.NOTICE.equals(boardKey)) {        
+      159 +            ((NoticePostEditorPanel) mainFrame.getScreen("noti
+          +cePostEditor")).open(null);                                   
+      160 +            mainFrame.switchTo("noticePostEditor");           
+      161 +        } else if (BoardKey.COMPLAINT.equals(boardKey)) {     
+      162 +            mainFrame.switchTo("complaint"); // 민원은 전용 접
+          +수 화면이 따로 있다                                           
+      163 +        } else {                                              
+      164 +            // 자유/기숙사/학과 게시판은 추가 필드가 없는 Post
+          +라 공용 에디터를 쓴다.                                        
+      165 +            ((PostEditorPanel) mainFrame.getScreen("postEditor
+          +")).open(boardKey, null);                                     
+      166 +            mainFrame.switchTo("postEditor");                 
+      167 +        }                                                     
+      168      }
+      169 +                                                              
+      170 +    /** 화면에 보여줄 게시판 이름. 학과 게시판은 boardKey가 곧
+          + 학과명이라 그대로 쓴다. */                                   
+      171 +    private String boardTitle(String boardKey) {              
+      172 +        switch (boardKey) {                                   
+      173 +            case BoardKey.FREE:                               
+      174 +                return "자유게시판";                          
+      175 +            case BoardKey.GROUP_BUY:                          
+      176 +                return "공동구매";                            
+      177 +            case BoardKey.DORM:                               
+      178 +                return "기숙사게시판";                        
+      179 +            case BoardKey.NOTICE:                             
+      180 +                return "공지사항";                            
+      181 +            case BoardKey.COMPLAINT:                          
+      182 +                return mainFrame.getCurrentUser().isAdmin() ? 
+          +"민원함" : "내 문의 내역";                                    
+      183 +            default:                                          
+      184 +                return boardKey;                              
+      185 +        }                                                     
+      186 +    }                                                         
+      187  }
+
+● Now wiring HomePanel's board buttons so the list is reachable:
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 13 lines, removed 5 lines
+       97      }
+       98  
+       99      private void openFreeBoard() {
+      100 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      100 +        openBoard(BoardKey.FREE);                             
+      101      }
+      102  
+      103      private void openGroupBuyBoard() {
+      104 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      104 +        openBoard(BoardKey.GROUP_BUY);                        
+      105      }
+      106  
+      107      private void openDepartmentBoard() {
+      108 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      108 +        // 학과 게시판은 별도 상수 없이 학과명 자체가 boardKey
+          +다 (BoardKey.java 주석 참고).                                 
+      109 +        openBoard(mainFrame.getCurrentUser().getDepartment());
+      110      }
+      111  
+      112      private void openDormBoard() {
+      112 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      113 +        // 비기숙사생이 눌러도 서버가 거부하고 그 사유가 목록 
+          +화면에 표시된다.                                              
+      114 +        openBoard(BoardKey.DORM);                             
+      115      }
+      116  
+      117      private void openNoticeBoard() {
+      116 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      118 +        openBoard(BoardKey.NOTICE);                           
+      119      }
+      120  
+      121 +    /** 게시판 6종이 같은 목록 화면을 공유한다. 학생이 열었으 
+          +므로 뒤로가기는 항상 "home". */                               
+      122 +    private void openBoard(String boardKey) {                 
+      123 +        ((PostListPanel) mainFrame.getScreen("postList")).open
+          +(boardKey, "home");                                           
+      124 +        mainFrame.switchTo("postList");                       
+      125 +    }                                                         
+      126 +                                                              
+      127      private void openComplaint() {
+      128          // ComplaintPanel은 넘겨줄 데이터가 없어서 open(...) 
+           없이 바로 전환한다.
+      129          mainFrame.switchTo("complaint");
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 1 line
+      11  import javax.swing.JPanel;
+      12  import javax.swing.JLabel;
+      13  
+      14 +import model.protocol.BoardKey;                                
+      15  import model.protocol.Packet;
+      16  import model.protocol.RequestType;
+      17  import model.protocol.ResponseStatus;
+
+  Made 1 scratchpad edit +213, read 3 files, ran 5 shell commands (ctrl+o to expand)
+
+● Background command "Start test server" failed with exit code 127
+
+● 게시글 목록 화면 — 자유게시판 / 내 문의 내역(답변 상태 표시, 글쓰기 버튼 숨김)
+
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (12.3K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\lst-1-free.png    B)
+  ›       ~\AppData\Local\Temp\claude\C--Projects-Java-summer-p\efaf1a9e- (11.2K
+  [image] b885-4ac7-b907-a75b12f39571\scratchpad\shots\lst-4-my-complaintB)
+          s.png
+
+● PostListPanel 구현하고, 이 화면이 실제로 열리도록 HomePanel의 게시판 버튼도
+  연결했습니다.
+
+  PostListPanel (3곳)
+
+  - initLayout() — 헤더(게시판명 + 글 개수) / JList 목록 / 하단
+  버튼(열기·글쓰기·뒤로)
+  - renderPosts() — 목록을 채우고 글쓰기 버튼 노출 여부를 정합니다. 셋 중 하나면
+  숨깁니다:
+    - backTarget이 "admin" (관리자가 관리 목적으로 연 목록 — 글쓰기는 학생 행위)
+    - 공지 게시판 (작성은 관리자 화면에서)
+    - 민원 게시판 (접수는 ComplaintPanel에서)
+  - openEditor() — boardKey에 따라 groupBuyPostEditor / noticePostEditor /
+  complaint / 공용 postEditor로 분기
+
+  목록 한 줄은 제목 · 작성자 · 작성시각 · 댓글 n이고, 게시글 타입별로 표시를
+  덧붙입니다 — 민원은 [답변완료]/[답변대기](datastruct.md의 상태 구분),
+  공동구매는 [최대 N명]. 항목은 더블클릭 또는 열기 버튼으로 상세로 넘어갑니다.
+
+  민원 게시판의 헤더는 보는 사람에 따라 다릅니다 — 관리자는 민원함, 학생은 내 
+  문의 내역(서버가 학생에게는 본인 것만 주기 때문).
+
+  HomePanel 게시판 버튼 연결 (요청 범위에서 추가)
+
+  PostListPanel이 완성돼야 의미가 생기는 부분이라 함께 연결했습니다:
+  자유/공동구매/학과/기숙사/공지 5개 → postList.open(boardKey, "home").
+  학과게시판은 로그인한 유저의 학과명이 곧 boardKey입니다.
+
+  채팅방·추천 버튼은 대상 화면(ChatRoomListPanel/RecommendPanel)이 아직
+  미완성이라 그대로 뒀습니다.
+
+  검증 (12개 전부 통과)
+
+  ┌──────────────────────────┬──────────────────────────────────────────────┐
+  │           확인           │                     결과                     │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 자유게시판 3건 표시      │ 헤더 자유게시판 (3), 목록 3건                │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 학생 목록                │ 글쓰기 보임                                  │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 공지 / 민원 목록         │ 글쓰기 숨김                                  │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ backTarget="admin"       │ 글쓰기 숨김                                  │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 학과게시판               │ 헤더가 학과명(물리학과)                      │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 민원 목록                │ 내 문의 내역, [답변완료]/[답변대기] 표시     │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 비기숙사생이             │ "접근 권한이 없는 게시판입니다: dorm"        │
+  │ 기숙사게시판             │ 다이얼로그                                   │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 선택 없이 열기           │ "글을 먼저 선택하세요" 안내                  │
+  ├──────────────────────────┼──────────────────────────────────────────────┤
+  │ 뒤로                     │ backTarget으로 복귀                          │
+  └──────────────────────────┴──────────────────────────────────────────────┘
+
+  남은 것
+
+  목록에서 글을 여는 순간 PostDetailPanel.renderPost()(아직 TODO)에 걸립니다.
+  마찬가지로 글쓰기는 PostEditorPanel.initLayout()에 걸립니다.
+
+  앱 전체가 실행되려면 아직 PostDetailPanel, PostEditorPanel, 
+  GroupBuyPostEditorPanel, ChatRoomListPanel, ChatRoomCreatePanel, 
+  ChatRoomPanel, RecommendPanel 7개가 남았습니다 — MainFrame.main()이 시작할 때
+  15개 패널을 전부 생성하기 때문에 하나라도 initLayout이 예외를 던지면 창이 안
+  뜹니다. 다음은 PostDetailPanel + PostEditorPanel(게시판 흐름 완성)이
+  자연스럽습니다.
+
+✻ Sautéed for 4m 19s
+
+※ recap: Java 커뮤니티 프로젝트의 서버 로직과 GUI 화면을 채워가는 중이고, 방금 게시글 목록 화면(PostListPanel)까지 구현·검증을 마쳤습니다. 다음은 PostDetailPanel과 PostEditorPanel을 만들어 게시판 흐름을 완성하는 것입니다.

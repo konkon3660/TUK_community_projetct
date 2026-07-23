@@ -35,6 +35,7 @@ public class NoticePostEditorPanel extends JPanel {
     private final JTextArea contentArea = new JTextArea();
     private final JTextField targetDepartmentsField = new JTextField(); // 쉼표 구분, 비우면 전체 공지
     private final JCheckBox dormNoticeCheckBox = new JCheckBox("기숙사 공지");
+    private final AttachmentPicker attachmentPicker;
     private final JButton saveButton = new JButton("저장");
     private final JButton cancelButton = new JButton("취소");
     private final JLabel titleLabel = new JLabel("공지 작성");
@@ -42,6 +43,7 @@ public class NoticePostEditorPanel extends JPanel {
 
     public NoticePostEditorPanel(MainFrame mainFrame) {
         this.mainFrame = mainFrame;
+        this.attachmentPicker = new AttachmentPicker(mainFrame, true);
         saveButton.addActionListener(e -> save());
         cancelButton.addActionListener(e -> mainFrame.switchTo("admin"));
         initLayout();
@@ -100,11 +102,16 @@ public class NoticePostEditorPanel extends JPanel {
         f.insets = new Insets(0, 4, 4, 4);
         foot.add(dormNoticeCheckBox, f);
 
+        f.gridx = 0;
+        f.gridy = 3;
+        f.gridwidth = 2;
+        foot.add(attachmentPicker, f);
+
         JPanel buttons = new JPanel();
         buttons.add(saveButton);
         buttons.add(cancelButton);
         f.gridx = 0;
-        f.gridy = 3;
+        f.gridy = 4;
         f.gridwidth = 2;
         f.anchor = GridBagConstraints.CENTER;
         f.insets = new Insets(10, 4, 0, 4);
@@ -125,12 +132,14 @@ public class NoticePostEditorPanel extends JPanel {
             contentArea.setText("");
             targetDepartmentsField.setText("");
             dormNoticeCheckBox.setSelected(false);
+            attachmentPicker.reset(null, null);
         } else {
             titleLabel.setText("공지 수정");
             titleField.setText(existingPost.getTitle());
             contentArea.setText(existingPost.getContent());
             targetDepartmentsField.setText(String.join(",", existingPost.getTargetDepartments()));
             dormNoticeCheckBox.setSelected(existingPost.isDormNotice());
+            attachmentPicker.reset(existingPost.getFilePath(), existingPost.getImagePath());
         }
         // 수정할 때는 대상 범위를 바꿀 수 없어서 아예 비활성화한다:
         // dormNotice는 NoticePost에서 final이고, 서버의 POST_UPDATE도 제목/내용/첨부만 반영한다.
@@ -147,11 +156,15 @@ public class NoticePostEditorPanel extends JPanel {
                 : new ArrayList<>(Arrays.asList(targetDepartmentsField.getText().split(",")));
         NoticePost post = isNew
                 ? new NoticePost(generateId(), titleField.getText(), authorId, contentArea.getText(),
-                        null, null, LocalDateTime.now(), targetDepartments, dormNoticeCheckBox.isSelected())
+                        attachmentPicker.getFilePath(), attachmentPicker.getImagePath(),
+                        LocalDateTime.now(), targetDepartments, dormNoticeCheckBox.isSelected())
                 : editingPost;
         if (!isNew) {
             post.setTitle(titleField.getText());
             post.setContent(contentArea.getText());
+            // 첨부는 이미 FILE_UPLOAD로 올라가 있고, 여기서는 그 경로만 게시글에 반영한다.
+            post.setFilePath(attachmentPicker.getFilePath());
+            post.setImagePath(attachmentPicker.getImagePath());
         }
         RequestType type = isNew ? RequestType.POST_CREATE : RequestType.POST_UPDATE;
         Packet request = Packet.request(type, new PostCreateOrUpdateRequest(BoardKey.NOTICE, post));

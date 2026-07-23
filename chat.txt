@@ -1,0 +1,1011 @@
+ ▐▛███▜▌   Claude Code v2.1.218
+▝▜█████▛▘  Opus 4.8 · Claude Pro
+  ▘▘ ▝▝    C:\Projects\Java_summer_p
+
+
+❯ 채팅 담당은 서버 쪽(ClientHandler의 채팅 관련 핸들러, model/ChatRoom.java)이  
+  이미 다 구현되어 있어서, 남은 건 전부 GUI입니다.                              
+                                                                                
+  GUI 화면 (client/GUI/)                                                        
+  ChatRoomListPanel.java — initLayout, renderRooms()(채팅방 목록 그리기, 항목   
+  클릭 시 ChatRoomPanel.open() 연결)                                            
+  ChatRoomCreatePanel.java — initLayout, 생성 성공 후 ChatRoomPanel로 전환하는  
+  부분                                                                          
+  ChatRoomPanel.java — 제일 큰 덩어리:                                          
+  initLayout — 메시지 목록 + 입력창 배치                                        
+  renderMessages() — room.getChats() 그리기, 방장이면                           
+  room.getPendingJoinRequests()도 함께 표시                                     
+  onPush() — 다른 사람이 보낸 메시지가 실시간으로 도착했을 때 화면 반영         
+  (SwingUtilities.invokeLater로 감싸야 한다는 주석 있음)                        
+  sendMessage() 아래 TODO — 보낸 메시지를 화면에 바로 반영할지, 서버 푸시로     
+  돌아올 때까지 기다릴지 결정                                                   
+  approveJoin/rejectJoin 호출 후 화면 갱신 부분                                 
+  HomePanel.java의 openChatRoomList() — "채팅방" 버튼이                         
+  ChatRoomListPanel.refresh() 호출 후 전환하는 부분                             
+                                                                                
+  넘길 때 documents/gui.md(화면 패턴, open(...) 컨벤션, PushListener 등록법)와  
+  documents/protocol.md(CHATROOM_*/CHAT_SEND/CHAT_MESSAGE_PUSH payload 표)를    
+  같이 주면 됩니다.                                                             
+                                                                                
+
+● I'll start by reading the handoff documents and the existing code to
+  understand the conventions.
+
+  Listed 1 directory, ran 1 shell command (ctrl+o to expand)
+
+● The docs were renumbered (gui.md → 06_gui.md, protocol.md → 05_protocol.md).
+  Reading those plus the chat files.
+
+  Searched for 1 pattern, read 14 files (ctrl+o to expand)
+
+● I have everything I need. Writing the four files now, starting with HomePanel.
+
+● Update(client\GUI\HomePanel.java)
+  ⎿  Added 3 lines, removed 1 line
+      130          mainFrame.switchTo("complaint");
+      131      }
+      132  
+      133 +    /** 채팅방 목록은 열 때마다 서버에서 다시 받아온다 (다른  
+          +사람이 만든 방이 바로 보이도록). */                           
+      134      private void openChatRoomList() {
+      134 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      135 +        ((ChatRoomListPanel) mainFrame.getScreen("chatRoomList
+          +")).refresh();                                                
+      136 +        mainFrame.switchTo("chatRoomList");                   
+      137      }
+      138  
+      139      private void openRecommend() {
+
+● Write(client\GUI\ChatRoomListPanel.java)
+  ⎿  Added 126 lines, removed 2 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.BorderLayout;                                  
+       4 +import java.awt.Component;                                     
+       5 +import java.awt.Font;                                          
+       6 +import java.awt.event.MouseAdapter;                            
+       7 +import java.awt.event.MouseEvent;                              
+       8  import java.util.List;
+       9 +import javax.swing.BorderFactory;                              
+      10 +import javax.swing.DefaultListCellRenderer;                    
+      11 +import javax.swing.DefaultListModel;                           
+      12  import javax.swing.JButton;
+      13 +import javax.swing.JLabel;                                     
+      14 +import javax.swing.JList;                                      
+      15  import javax.swing.JOptionPane;
+      16  import javax.swing.JPanel;
+      17 +import javax.swing.JScrollPane;                                
+      18 +import javax.swing.ListSelectionModel;                         
+      19  
+      20  import model.ChatRoom;
+      21 +import model.protocol.ChatRoomJoinRequest;                     
+      22  import model.protocol.Packet;
+      23  import model.protocol.RequestType;
+      24  import model.protocol.ResponseStatus;
+     ...
+      30      private final JButton createButton = new JButton("채팅방 만
+          들기");
+      31      private final JButton refreshButton = new JButton("새로고침
+          ");
+      32      private final JButton backButton = new JButton("뒤로");
+      33 +    private final JButton enterButton = new JButton("들어가기")
+         +;                                                              
+      34 +    private final JLabel headerLabel = new JLabel();           
+      35 +    private final DefaultListModel<ChatRoom> listModel = new De
+         +faultListModel<>();                                            
+      36 +    private final JList<ChatRoom> roomJList = new JList<>(listM
+         +odel);                                                         
+      37      private List<ChatRoom> rooms;
+      38  
+      39      public ChatRoomListPanel(MainFrame mainFrame) {
+     ...
+       41          createButton.addActionListener(e -> mainFrame.switchTo
+           ("chatRoomCreate"));
+       42          refreshButton.addActionListener(e -> refresh());
+       43          backButton.addActionListener(e -> mainFrame.switchTo("
+           home"));
+       44 +        enterButton.addActionListener(e -> openSelectedRoom())
+          +;                                                             
+       45          initLayout();
+       46      }
+       47  
+       48      /** 위 버튼들과 채팅방 목록을 배치하는 부분 — 디자인은 자
+           유. */
+       49      private void initLayout() {
+       32 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       50 +        // PostListPanel과 같은 구성: 위에 제목, 가운데 목록, 
+          +아래 버튼 줄.                                                 
+       51 +        setLayout(new BorderLayout(0, 12));                   
+       52 +        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 
+          +32));                                                         
+       53 +                                                              
+       54 +        headerLabel.setFont(headerLabel.getFont().deriveFont(F
+          +ont.BOLD, 20f));                                              
+       55 +        add(headerLabel, BorderLayout.NORTH);                 
+       56 +                                                              
+       57 +        roomJList.setSelectionMode(ListSelectionModel.SINGLE_S
+          +ELECTION);                                                    
+       58 +        roomJList.setCellRenderer(new ChatRoomRenderer());    
+       59 +        roomJList.setFixedCellHeight(28);                     
+       60 +        roomJList.addMouseListener(new MouseAdapter() {       
+       61 +            @Override                                         
+       62 +            public void mouseClicked(MouseEvent e) {          
+       63 +                if (e.getClickCount() == 2) { // 더블클릭으로 
+          +도 들어갈 수 있게                                             
+       64 +                    openSelectedRoom();                       
+       65 +                }                                             
+       66 +            }                                                 
+       67 +        });                                                   
+       68 +        add(new JScrollPane(roomJList), BorderLayout.CENTER); 
+       69 +                                                              
+       70 +        JPanel buttons = new JPanel();                        
+       71 +        buttons.add(enterButton);                             
+       72 +        buttons.add(createButton);                            
+       73 +        buttons.add(refreshButton);                           
+       74 +        buttons.add(backButton);                              
+       75 +        add(buttons, BorderLayout.SOUTH);                     
+       76      }
+       77  
+       78 +    /** 목록 한 줄의 표시 형식: [방번호] 방장 · 인원 · 가입 제
+          +한 · 내 참여 여부 */                                          
+       79 +    private class ChatRoomRenderer extends DefaultListCellRend
+          +erer {                                                        
+       80 +        @Override                                             
+       81 +        public Component getListCellRendererComponent(JList<?>
+          + list, Object value, int index,                               
+       82 +                                                       boolean
+          + isSelected, boolean cellHasFocus) {                          
+       83 +            ChatRoom room = (ChatRoom) value;                 
+       84 +            StringBuilder line = new StringBuilder();         
+       85 +            line.append('[').append(room.getRoomId()).append("
+          +]   방장 ").append(room.getOwnerId())                         
+       86 +                    .append("   ·   인원 ").append(room.getMem
+          +berIds().size())                                              
+       87 +                    .append('/').append(room.getMaxMembers() =
+          += -1 ? "무제한" : room.getMaxMembers());                      
+       88 +            if (room.getAdmissionYearLimit() != null) {       
+       89 +                line.append("   ·   ").append(room.getAdmissio
+          +nYearLimit()).append("학번만");                               
+       90 +            }                                                 
+       91 +            if (!room.getDepartmentLimit().isEmpty()) {       
+       92 +                line.append("   ·   ").append(String.join(",",
+          + room.getDepartmentLimit()));                                 
+       93 +            }                                                 
+       94 +            if (room.isDormOnlyLimit()) {                     
+       95 +                line.append("   ·   기숙사생만");             
+       96 +            }                                                 
+       97 +            if (isMember(room)) {                             
+       98 +                line.append("   ·   참여중");                 
+       99 +            } else if (room.getPendingJoinRequests().containsK
+          +ey(myId())) {                                                 
+      100 +                line.append("   ·   승인 대기중");            
+      101 +            }                                                 
+      102 +            return super.getListCellRendererComponent(list, li
+          +ne.toString(), index, isSelected, cellHasFocus);              
+      103 +        }                                                     
+      104 +    }                                                         
+      105 +                                                              
+      106      /** mainFrame.switchTo("chatRoomList") 직후(혹은 화면이 다
+           시 보일 때마다) 호출해서 목록을 갱신한다. */
+      107      public void refresh() {
+      108          Packet request = Packet.request(RequestType.CHATROOM_L
+           IST, null);
+     ...
+      118      /** rooms를 화면에 그리고, 항목을 클릭하면
+      119       *  ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open
+           (room) 후 switchTo("chatRoom") — 렌더링은 자유. */
+      120      private void renderRooms() {
+       50 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      121 +        headerLabel.setText("채팅방 (" + rooms.size() + ")"); 
+      122 +        listModel.clear();                                    
+      123 +        for (ChatRoom room : rooms) {                         
+      124 +            listModel.addElement(room);                       
+      125 +        }                                                     
+      126 +        roomJList.clearSelection();                           
+      127      }
+      128 +                                                              
+      129 +    /** 선택한 방으로 들어간다. 아직 참여자가 아니면 먼저 가입
+          + 신청을 보낸다                                                
+      130 +     *  (참여자가 아니면 서버가 CHAT_SEND를 거부하므로 그냥 들
+          +여보내면 아무것도 못 한다). */                                
+      131 +    private void openSelectedRoom() {                         
+      132 +        ChatRoom selected = roomJList.getSelectedValue();     
+      133 +        if (selected == null) {                               
+      134 +            JOptionPane.showMessageDialog(this, "채팅방을 먼저
+          + 선택하세요.", "들어가기", JOptionPane.WARNING_MESSAGE);      
+      135 +            return;                                           
+      136 +        }                                                     
+      137 +        if (!isMember(selected)) {                            
+      138 +            requestJoin(selected);                            
+      139 +            return;                                           
+      140 +        }                                                     
+      141 +        ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open
+          +(selected);                                                   
+      142 +        mainFrame.switchTo("chatRoom");                       
+      143 +    }                                                         
+      144 +                                                              
+      145 +    /** 가입지원 메세지를 받아 CHATROOM_JOIN_REQUEST를 보낸다.
+          + 승인은 방장이 채팅방 화면에서 한다. */                       
+      146 +    private void requestJoin(ChatRoom room) {                 
+      147 +        if (room.getPendingJoinRequests().containsKey(myId()))
+          + {                                                            
+      148 +            JOptionPane.showMessageDialog(this, "이미 가입 신 
+          +청을 보냈습니다. 방장의 승인을 기다려 주세요.",               
+      149 +                    "가입 신청", JOptionPane.INFORMATION_MESSA
+          +GE);                                                          
+      150 +            return;                                           
+      151 +        }                                                     
+      152 +        String message = JOptionPane.showInputDialog(this,    
+      153 +                "참여 중이 아닌 채팅방입니다. 가입 신청 메세지
+          +를 입력하세요.", "가입 신청", JOptionPane.QUESTION_MESSAGE);  
+      154 +        if (message == null) { // 취소                        
+      155 +            return;                                           
+      156 +        }                                                     
+      157 +        Packet request = Packet.request(RequestType.CHATROOM_J
+          +OIN_REQUEST,                                                  
+      158 +                new ChatRoomJoinRequest(room.getRoomId(), mess
+          +age));                                                        
+      159 +        Packet response = mainFrame.getConnection().sendReques
+          +t(request);                                                   
+      160 +        if (response.getStatus() == ResponseStatus.OK) {      
+      161 +            JOptionPane.showMessageDialog(this, "가입 신청을  
+          +보냈습니다. 방장이 승인하면 들어갈 수 있습니다.",             
+      162 +                    "가입 신청", JOptionPane.INFORMATION_MESSA
+          +GE);                                                          
+      163 +            refresh(); // 방금 보낸 신청이 "승인 대기중"으로  
+          +보이도록                                                      
+      164 +        } else {                                              
+      165 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "가입 신청 실패", JOptionPane.ERROR_MESSAGE);   
+      166 +        }                                                     
+      167 +    }                                                         
+      168 +                                                              
+      169 +    private boolean isMember(ChatRoom room) {                 
+      170 +        return room.getMemberIds().contains(myId());          
+      171 +    }                                                         
+      172 +                                                              
+      173 +    private String myId() {                                   
+      174 +        return mainFrame.getCurrentUser().getId();            
+      175 +    }                                                         
+      176  }
+
+  Read 1 file (ctrl+o to expand)
+
+● Now the create panel:
+
+● Write(client\GUI\ChatRoomCreatePanel.java)
+  ⎿  Added 89 lines, removed 4 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.Color;                                         
+       4 +import java.awt.Font;                                          
+       5 +import java.awt.GridBagConstraints;                            
+       6 +import java.awt.GridBagLayout;                                 
+       7 +import java.awt.Insets;                                        
+       8  import java.util.Arrays;
+       9 +import javax.swing.BorderFactory;                              
+      10  import javax.swing.JButton;
+      11  import javax.swing.JCheckBox;
+      12 +import javax.swing.JLabel;                                     
+      13  import javax.swing.JOptionPane;
+      14  import javax.swing.JPanel;
+      15  import javax.swing.JTextField;
+     ...
+       26      private final JCheckBox dormOnlyCheckBox = new JCheckBox("
+           기숙사생만");
+       27      private final JTextField departmentLimitField = new JTextF
+           ield(); // 쉼표 구분, 비우면 학과 제한 없음
+       28      private final JButton createButton = new JButton("만들기")
+           ;
+       29 +    private final JButton backButton = new JButton("뒤로");   
+       30  
+       31      public ChatRoomCreatePanel(MainFrame mainFrame) {
+       32          this.mainFrame = mainFrame;
+       33          createButton.addActionListener(e -> create());
+       34 +        backButton.addActionListener(e -> mainFrame.switchTo("
+          +chatRoomList"));                                              
+       35 +        // 입력칸에서 엔터를 쳐도 만들어지게 한다 (RegisterPan
+          +el과 동일한 조작감).                                          
+       36 +        maxMembersField.addActionListener(e -> create());     
+       37 +        departmentLimitField.addActionListener(e -> create());
+       38          initLayout();
+       39      }
+       40  
+       41      /** 위 필드들을 배치하는 부분 — 디자인은 자유. */
+       42      private void initLayout() {
+       31 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       43 +        // RegisterPanel과 같은 구성: GridBagLayout 위에 폼 하
+          +나만 올려 항상 가운데 정렬.                                   
+       44 +        setLayout(new GridBagLayout());                       
+       45 +        JPanel form = new JPanel(new GridBagLayout());        
+       46 +        form.setBorder(BorderFactory.createEmptyBorder(24, 32,
+          + 24, 32));                                                    
+       47 +                                                              
+       48 +        GridBagConstraints c = new GridBagConstraints();      
+       49 +                                                              
+       50 +        JLabel title = new JLabel("채팅방 만들기");           
+       51 +        title.setFont(title.getFont().deriveFont(Font.BOLD, 22
+          +f));                                                          
+       52 +        c.gridx = 0;                                          
+       53 +        c.gridy = 0;                                          
+       54 +        c.gridwidth = 2;                                      
+       55 +        c.anchor = GridBagConstraints.CENTER;                 
+       56 +        c.insets = new Insets(6, 6, 20, 6);                   
+       57 +        form.add(title, c);                                   
+       58 +                                                              
+       59 +        c.gridwidth = 1;                                      
+       60 +        c.insets = new Insets(6, 6, 6, 6);                    
+       61 +        c.anchor = GridBagConstraints.LINE_END;               
+       62 +        c.gridy = 1;                                          
+       63 +        form.add(new JLabel("정원"), c);                      
+       64 +        c.gridy = 2;                                          
+       65 +        form.add(new JLabel("학과 제한"), c);                 
+       66 +                                                              
+       67 +        c.gridx = 1;                                          
+       68 +        c.anchor = GridBagConstraints.LINE_START;             
+       69 +        c.fill = GridBagConstraints.HORIZONTAL;               
+       70 +        maxMembersField.setColumns(16);                       
+       71 +        departmentLimitField.setColumns(16);                  
+       72 +        c.gridy = 1;                                          
+       73 +        form.add(maxMembersField, c);                         
+       74 +        c.gridy = 2;                                          
+       75 +        form.add(departmentLimitField, c);                    
+       76 +                                                              
+       77 +        c.gridy = 3;                                          
+       78 +        c.fill = GridBagConstraints.NONE;                     
+       79 +        c.insets = new Insets(0, 6, 0, 6);                    
+       80 +        form.add(dormOnlyCheckBox, c);                        
+       81 +                                                              
+       82 +        JLabel hint = new JLabel("※ 정원은 숫자, -1이면 무제한
+          + · 학과 제한은 쉼표로 구분, 비우면 제한 없음");               
+       83 +        hint.setFont(hint.getFont().deriveFont(11f));         
+       84 +        hint.setForeground(Color.GRAY);                       
+       85 +        c.gridx = 0;                                          
+       86 +        c.gridy = 4;                                          
+       87 +        c.gridwidth = 2;                                      
+       88 +        c.anchor = GridBagConstraints.CENTER;                 
+       89 +        c.insets = new Insets(10, 6, 0, 6);                   
+       90 +        form.add(hint, c);                                    
+       91 +                                                              
+       92 +        JPanel buttons = new JPanel();                        
+       93 +        buttons.add(createButton);                            
+       94 +        buttons.add(backButton);                              
+       95 +        c.gridy = 5;                                          
+       96 +        c.insets = new Insets(14, 6, 0, 6);                   
+       97 +        form.add(buttons, c);                                 
+       98 +                                                              
+       99 +        add(form, new GridBagConstraints());                  
+      100      }
+      101  
+      102      private void create() {
+      103          String ownerId = mainFrame.getCurrentUser().getId();
+       36 -        int maxMembers = Integer.parseInt(maxMembersField.getT
+          -ext());                                                       
+      104 +        int maxMembers;                                       
+      105 +        try {                                                 
+      106 +            maxMembers = Integer.parseInt(maxMembersField.getT
+          +ext().trim());                                                
+      107 +        } catch (NumberFormatException e) {                   
+      108 +            JOptionPane.showMessageDialog(this, "정원은 숫자로
+          + 입력하세요 (-1이면 무제한).",                                
+      109 +                    "채팅방 생성 실패", JOptionPane.ERROR_MESS
+          +AGE);                                                         
+      110 +            return;                                           
+      111 +        }                                                     
+      112          // roomId는 서버가 채번해서 응답으로 돌려준다 — 요청에
+           는 빈 문자열로 보낸다.
+      113          ChatRoom newRoom = new ChatRoom("", ownerId, maxMember
+           s);
+      114          newRoom.setDormOnlyLimit(dormOnlyCheckBox.isSelected()
+           );
+     ...
+      118          Packet request = Packet.request(RequestType.CHATROOM_C
+           REATE, newRoom);
+      119          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+      120          if (response.getStatus() == ResponseStatus.OK) {
+       46 -            // TODO: 구현 필요. 예: ChatRoom created = (ChatRo
+          -om) response.getPayload();                                    
+       47 -            //       ((ChatRoomPanel) mainFrame.getScreen("cha
+          -tRoom")).open(created); mainFrame.switchTo("chatRoom");       
+      121 +            // 방장은 서버가 바로 참여자로 넣어주므로(ClientHa
+          +ndler.handleChatRoomCreate)                                   
+      122 +            // 만든 방에 그대로 들어간다. 응답으로 온 방에는  
+          +서버가 채번한 roomId가 들어있다.                              
+      123 +            ChatRoom created = (ChatRoom) response.getPayload(
+          +);                                                            
+      124 +            clearFields(); // 다음에 이 화면으로 다시 들어왔을
+          + 때 이전 입력이 남아있지 않도록                               
+      125 +            ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).
+          +open(created);                                                
+      126 +            mainFrame.switchTo("chatRoom");                   
+      127          } else {
+      128              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "채팅방 생성 실패", JOptionPane.ERROR_MESSAGE);
+      129          }
+      130      }
+      131 +                                                              
+      132 +    private void clearFields() {                              
+      133 +        maxMembersField.setText("");                          
+      134 +        departmentLimitField.setText("");                     
+      135 +        dormOnlyCheckBox.setSelected(false);                  
+      136 +    }                                                         
+      137  }
+
+● Write(client\GUI\ChatRoomPanel.java)
+  ⎿  Added 210 lines, removed 10 lines
+       1  package client.GUI;
+       2  
+       3 +import java.awt.BorderLayout;                                  
+       4 +import java.awt.Component;                                     
+       5 +import java.awt.Dimension;                                     
+       6 +import java.awt.Font;                                          
+       7 +import java.time.LocalDateTime;                                
+       8 +import java.time.format.DateTimeFormatter;                     
+       9 +import java.util.List;                                         
+      10 +import javax.swing.BorderFactory;                              
+      11 +import javax.swing.DefaultListCellRenderer;                    
+      12 +import javax.swing.DefaultListModel;                           
+      13  import javax.swing.JButton;
+      14 +import javax.swing.JLabel;                                     
+      15 +import javax.swing.JList;                                      
+      16  import javax.swing.JOptionPane;
+      17  import javax.swing.JPanel;
+      18 +import javax.swing.JScrollPane;                                
+      19 +import javax.swing.JTextArea;                                  
+      20  import javax.swing.JTextField;
+      21 +import javax.swing.ListSelectionModel;                         
+      22 +import javax.swing.SwingUtilities;                             
+      23  
+      24  import client.CT.PushListener;
+      25  import model.Chat;
+     ...
+       32  import model.protocol.ResponseStatus;
+       33  
+       34  /** 채팅방 화면. 메시지 송수신 + (방장이면) 가입신청 승인/거절
+           . */
+       35 +@SuppressWarnings("unchecked")                                
+       36  public class ChatRoomPanel extends JPanel implements PushListe
+           ner {
+       37 +    private static final DateTimeFormatter DISPLAY_TIME = Date
+          +TimeFormatter.ofPattern("HH:mm");                             
+       38 +                                                              
+       39      private final MainFrame mainFrame;
+       40      private final JTextField messageField = new JTextField();
+       41      private final JButton sendButton = new JButton("보내기");
+       42      private final JButton backButton = new JButton("뒤로");
+       43 +    private final JButton refreshButton = new JButton("새로고 
+          +침");                                                         
+       44 +    private final JLabel headerLabel = new JLabel();          
+       45 +    private final JTextArea chatArea = new JTextArea();       
+       46 +    private final JPanel pendingPanel = new JPanel(new BorderL
+          +ayout(0, 6));                                                 
+       47 +    private final DefaultListModel<String> pendingModel = new 
+          +DefaultListModel<>();                                         
+       48 +    private final JList<String> pendingJList = new JList<>(pen
+          +dingModel);                                                   
+       49 +    private final JButton approveButton = new JButton("승인");
+       50 +    private final JButton rejectButton = new JButton("거절"); 
+       51      private ChatRoom room;
+       52  
+       53      public ChatRoomPanel(MainFrame mainFrame) {
+       54          this.mainFrame = mainFrame;
+       55          sendButton.addActionListener(e -> sendMessage());
+       56          backButton.addActionListener(e -> mainFrame.switchTo("
+           chatRoomList"));
+       57 +        refreshButton.addActionListener(e -> refresh());      
+       58 +        approveButton.addActionListener(e -> approveSelectedJo
+          +in());                                                        
+       59 +        rejectButton.addActionListener(e -> rejectSelectedJoin
+          +());                                                          
+       60 +        // 입력칸에서 엔터를 쳐도 전송되게 한다.              
+       61 +        messageField.addActionListener(e -> sendMessage());   
+       62          initLayout();
+       63      }
+       64  
+       65      /** 위 필드들과 채팅 메시지 목록을 배치하는 부분 — 디자인
+           은 자유. */
+       66      private void initLayout() {
+       35 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+       67 +        setLayout(new BorderLayout(0, 12));                   
+       68 +        setBorder(BorderFactory.createEmptyBorder(20, 32, 20, 
+          +32));                                                         
+       69 +                                                              
+       70 +        headerLabel.setFont(headerLabel.getFont().deriveFont(F
+          +ont.BOLD, 20f));                                              
+       71 +        add(headerLabel, BorderLayout.NORTH);                 
+       72 +                                                              
+       73 +        chatArea.setEditable(false); // 읽기 전용 — 입력은 아 
+          +래 messageField로만                                           
+       74 +        chatArea.setLineWrap(true);                           
+       75 +        chatArea.setWrapStyleWord(true);                      
+       76 +        add(new JScrollPane(chatArea), BorderLayout.CENTER);  
+       77 +                                                              
+       78 +        // 가입 신청 목록은 방장에게만 보인다 (renderPendingJo
+          +inRequests에서 켜고 끈다).                                    
+       79 +        JLabel pendingTitle = new JLabel("가입 신청");        
+       80 +        pendingTitle.setFont(pendingTitle.getFont().deriveFont
+          +(Font.BOLD, 13f));                                            
+       81 +        pendingJList.setSelectionMode(ListSelectionModel.SINGL
+          +E_SELECTION);                                                 
+       82 +        pendingJList.setCellRenderer(new PendingRenderer());  
+       83 +        JScrollPane pendingScroll = new JScrollPane(pendingJLi
+          +st);                                                          
+       84 +        pendingScroll.setPreferredSize(new Dimension(220, 0));
+       85 +        JPanel pendingButtons = new JPanel();                 
+       86 +        pendingButtons.add(approveButton);                    
+       87 +        pendingButtons.add(rejectButton);                     
+       88 +        pendingPanel.setBorder(BorderFactory.createEmptyBorder
+          +(0, 12, 0, 0));                                               
+       89 +        pendingPanel.add(pendingTitle, BorderLayout.NORTH);   
+       90 +        pendingPanel.add(pendingScroll, BorderLayout.CENTER); 
+       91 +        pendingPanel.add(pendingButtons, BorderLayout.SOUTH); 
+       92 +        pendingPanel.setVisible(false);                       
+       93 +        add(pendingPanel, BorderLayout.EAST);                 
+       94 +                                                              
+       95 +        JPanel bottom = new JPanel(new BorderLayout(6, 0));   
+       96 +        JPanel bottomButtons = new JPanel();                  
+       97 +        bottomButtons.add(sendButton);                        
+       98 +        bottomButtons.add(refreshButton);                     
+       99 +        bottomButtons.add(backButton);                        
+      100 +        bottom.add(messageField, BorderLayout.CENTER);        
+      101 +        bottom.add(bottomButtons, BorderLayout.EAST);         
+      102 +        add(bottom, BorderLayout.SOUTH);                      
+      103      }
+      104  
+      105 +    /** 가입 신청 한 줄의 표시 형식: 학번 — 가입지원 메세지 */
+      106 +    private class PendingRenderer extends DefaultListCellRende
+          +rer {                                                         
+      107 +        @Override                                             
+      108 +        public Component getListCellRendererComponent(JList<?>
+          + list, Object value, int index,                               
+      109 +                                                       boolean
+          + isSelected, boolean cellHasFocus) {                          
+      110 +            String userId = (String) value;                   
+      111 +            String message = room == null ? null : room.getPen
+          +dingJoinRequests().get(userId);                               
+      112 +            String line = (message == null || message.isEmpty(
+          +)) ? userId : userId + " — " + message;                       
+      113 +            return super.getListCellRendererComponent(list, li
+          +ne, index, isSelected, cellHasFocus);                         
+      114 +        }                                                     
+      115 +    }                                                         
+      116 +                                                              
+      117      /** mainFrame.switchTo("chatRoom") 전에 반드시 먼저 호출한
+           다. 이 화면이 떠 있는 동안
+      118       *  실시간 수신을 받도록 ServerConnection의 PushListener를
+            이 화면으로 등록한다. */
+      119      public void open(ChatRoom room) {
+     ...
+      122          renderMessages();
+      123      }
+      124  
+      125 +    /**                                                       
+      126 +     * 서버에서 이 방의 최신 상태를 다시 받아온다. 들고 있는 r
+          +oom은 채팅방 목록을 받아온 시점의                             
+      127 +     * 사본이라, 그 뒤에 들어온 가입 신청이나 내가 접속하지 않
+          +았던 동안의 채팅은 들어있지 않다.                             
+      128 +     * 방 하나만 가져오는 요청이 없으므로 CHATROOM_LIST에서 같
+          +은 roomId를 찾아 쓴다.                                        
+      129 +     */                                                       
+      130 +    private void refresh() {                                  
+      131 +        if (room == null) {                                   
+      132 +            return;                                           
+      133 +        }                                                     
+      134 +        Packet response = mainFrame.getConnection().sendReques
+          +t(Packet.request(RequestType.CHATROOM_LIST, null));           
+      135 +        if (response.getStatus() != ResponseStatus.OK) {      
+      136 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "채팅방 조회 실패", JOptionPane.ERROR_MESSAGE); 
+      137 +            return;                                           
+      138 +        }                                                     
+      139 +        for (ChatRoom candidate : (List<ChatRoom>) response.ge
+          +tPayload()) {                                                 
+      140 +            if (candidate.getRoomId().equals(room.getRoomId())
+          +) {                                                           
+      141 +                this.room = candidate;                        
+      142 +                renderMessages();                             
+      143 +                return;                                       
+      144 +            }                                                 
+      145 +        }                                                     
+      146 +        JOptionPane.showMessageDialog(this, "채팅방이 사라졌습
+          +니다: " + room.getRoomId(),                                   
+      147 +                "채팅방 조회 실패", JOptionPane.ERROR_MESSAGE)
+          +;                                                             
+      148 +    }                                                         
+      149 +                                                              
+      150      private void sendMessage() {
+      151 +        String content = messageField.getText().trim();       
+      152 +        if (content.isEmpty()) {                              
+      153 +            return;                                           
+      154 +        }                                                     
+      155          Packet request = Packet.request(RequestType.CHAT_SEND,
+       48 -                new ChatSendRequest(room.getRoomId(), messageF
+          -ield.getText()));                                             
+      156 +                new ChatSendRequest(room.getRoomId(), content)
+          +);                                                            
+      157          Packet response = mainFrame.getConnection().sendReques
+           t(request);
+      158          if (response.getStatus() != ResponseStatus.OK) {
+      159              JOptionPane.showMessageDialog(this, response.getEr
+           rorMessage(), "전송 실패", JOptionPane.ERROR_MESSAGE);
+      160 +            return;                                           
+      161          }
+       53 -        // TODO: 구현 필요. 보낸 메시지를 화면에 바로 반영할지
+          -, CHAT_MESSAGE_PUSH로 돌아올 때까지 기다릴지 정한다.          
+      162 +        // 서버는 보낸 사람에게는 CHAT_MESSAGE_PUSH를 보내지  
+          +않는다(ClientHandler.handleChatSend).                         
+      163 +        // 기다려도 오지 않으므로 내가 보낸 메시지는 여기서 직
+          +접 화면에 넣는다.                                             
+      164 +        // 시각은 서버가 찍은 것과 몇 ms 다를 수 있지만, 다시 
+          +들어오면 서버 값으로 맞춰진다.                                
+      165 +        room.sendChat(new Chat(myId(), LocalDateTime.now(), co
+          +ntent));                                                      
+      166 +        messageField.setText("");                             
+      167 +        renderMessages();                                     
+      168      }
+      169  
+      170      /** 방장 전용: 가입 신청을 수락한다. userId는 room.getPend
+           ingJoinRequests()의 key. */
+      171      private void approveJoin(String userId) {
+      172          Packet request = Packet.request(RequestType.CHATROOM_J
+           OIN_APPROVE,
+      173                  new ChatRoomJoinDecision(room.getRoomId(), use
+           rId));
+       60 -        mainFrame.getConnection().sendRequest(request);       
+       61 -        // TODO: 구현 필요. 화면 갱신.                        
+      174 +        Packet response = mainFrame.getConnection().sendReques
+          +t(request);                                                   
+      175 +        if (response.getStatus() != ResponseStatus.OK) {      
+      176 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "가입 승인 실패", JOptionPane.ERROR_MESSAGE);   
+      177 +            return;                                           
+      178 +        }                                                     
+      179 +        room.approveJoin(userId); // 서버가 한 것과 같은 처리 
+          +를 들고 있는 사본에도 반영                                    
+      180 +        renderMessages();                                     
+      181      }
+      182  
+      183      /** 방장 전용: 가입 신청을 거절한다. */
+      184      private void rejectJoin(String userId) {
+      185          Packet request = Packet.request(RequestType.CHATROOM_J
+           OIN_REJECT,
+      186                  new ChatRoomJoinDecision(room.getRoomId(), use
+           rId));
+       68 -        mainFrame.getConnection().sendRequest(request);       
+       69 -        // TODO: 구현 필요. 화면 갱신.                        
+      187 +        Packet response = mainFrame.getConnection().sendReques
+          +t(request);                                                   
+      188 +        if (response.getStatus() != ResponseStatus.OK) {      
+      189 +            JOptionPane.showMessageDialog(this, response.getEr
+          +rorMessage(), "가입 거절 실패", JOptionPane.ERROR_MESSAGE);   
+      190 +            return;                                           
+      191 +        }                                                     
+      192 +        room.rejectJoin(userId);                              
+      193 +        renderMessages();                                     
+      194      }
+      195  
+      196 +    private void approveSelectedJoin() {                      
+      197 +        String userId = selectedPendingUserId();              
+      198 +        if (userId != null) {                                 
+      199 +            approveJoin(userId);                              
+      200 +        }                                                     
+      201 +    }                                                         
+      202 +                                                              
+      203 +    private void rejectSelectedJoin() {                       
+      204 +        String userId = selectedPendingUserId();              
+      205 +        if (userId != null) {                                 
+      206 +            rejectJoin(userId);                               
+      207 +        }                                                     
+      208 +    }                                                         
+      209 +                                                              
+      210 +    private String selectedPendingUserId() {                  
+      211 +        String selected = pendingJList.getSelectedValue();    
+      212 +        if (selected == null) {                               
+      213 +            JOptionPane.showMessageDialog(this, "가입 신청을  
+          +먼저 선택하세요.", "가입 신청", JOptionPane.WARNING_MESSAGE); 
+      214 +        }                                                     
+      215 +        return selected;                                      
+      216 +    }                                                         
+      217 +                                                              
+      218      /** room.getChats()를 그리고, room.getOwnerId()가 나(mainF
+           rame.getCurrentUser())와 같으면
+      219       *  room.getPendingJoinRequests()도 함께 보여주는 부분 — 
+           렌더링은 자유. */
+      220      private void renderMessages() {
+       75 -        throw new UnsupportedOperationException("TODO: 구현 필
+          -요");                                                         
+      221 +        if (room == null) {                                   
+      222 +            return;                                           
+      223 +        }                                                     
+      224 +        headerLabel.setText("채팅방 " + room.getRoomId()      
+      225 +                + "   ·   인원 " + room.getMemberIds().size() 
+      226 +                + "/" + (room.getMaxMembers() == -1 ? "무제한"
+          + : room.getMaxMembers())                                      
+      227 +                + (isOwner() ? "   ·   내가 방장" : ""));     
+      228 +                                                              
+      229 +        StringBuilder text = new StringBuilder();             
+      230 +        for (Chat chat : room.getChats()) {                   
+      231 +            text.append('[').append(chat.getSentAt().format(DI
+          +SPLAY_TIME)).append("] ")                                     
+      232 +                    .append(displayName(chat.getSenderId())).a
+          +ppend(": ")                                                   
+      233 +                    .append(chat.getContent()).append('\n');  
+      234 +        }                                                     
+      235 +        chatArea.setText(text.toString());                    
+      236 +        chatArea.setCaretPosition(chatArea.getDocument().getLe
+          +ngth()); // 항상 최신 메시지가 보이도록                       
+      237 +                                                              
+      238 +        renderPendingJoinRequests();                          
+      239      }
+      240  
+      241 +    /** 가입 신청은 방장만 처리할 수 있으므로(서버도 방장만 허
+          +용) 방장에게만 보여준다. */                                   
+      242 +    private void renderPendingJoinRequests() {                
+      243 +        boolean owner = isOwner();                            
+      244 +        pendingModel.clear();                                 
+      245 +        if (owner) {                                          
+      246 +            for (String userId : room.getPendingJoinRequests()
+          +.keySet()) {                                                  
+      247 +                pendingModel.addElement(userId);              
+      248 +            }                                                 
+      249 +        }                                                     
+      250 +        pendingPanel.setVisible(owner);                       
+      251 +        revalidate();                                         
+      252 +        repaint();                                            
+      253 +    }                                                         
+      254 +                                                              
+      255      /** 서버가 CHAT_MESSAGE_PUSH를 보낼 때 호출됨(다른 사람이 
+           이 방에 채팅을 보냈을 때). */
+      256      @Override
+      257      public void onPush(Packet packet) {
+     ...
+      263              return;
+      264          }
+      265          Chat chat = payload.getChat();
+       89 -        // TODO: 구현 필요. room.sendChat(chat) 등으로 반영 후
+          - 화면 갱신                                                    
+       90 -        //       (이 콜백은 네트워크 스레드에서 호출되므로 Swi
+          -ngUtilities.invokeLater로 감싸야 한다).                       
+      266 +        // 이 콜백은 네트워크 스레드(ServerConnection의 readLo
+          +op)에서 호출된다. Swing 컴포넌트는                            
+      267 +        // 이벤트 디스패치 스레드에서만 만져야 하므로 반영은 i
+          +nvokeLater 안에서 한다.                                       
+      268 +        SwingUtilities.invokeLater(() -> {                    
+      269 +            // 큐에 들어가 있는 동안 다른 방으로 옮겨갔을 수  
+          +있으므로 여기서 한 번 더 확인한다.                            
+      270 +            if (room != null && payload.getRoomId().equals(roo
+          +m.getRoomId())) {                                             
+      271 +                room.sendChat(chat);                          
+      272 +                renderMessages();                             
+      273 +            }                                                 
+      274 +        });                                                   
+      275      }
+      276 +                                                              
+      277 +    private boolean isOwner() {                               
+      278 +        return room != null && mainFrame.getCurrentUser() != n
+          +ull                                                           
+      279 +                && room.getOwnerId().equals(myId());          
+      280 +    }                                                         
+      281 +                                                              
+      282 +    /** 방 안에서 쓰는 프로필 이름이 있으면 그것을, 없으면 학 
+          +번을 그대로 보여준다. */                                      
+      283 +    private String displayName(String userId) {               
+      284 +        String nickname = room.getNickname(userId);           
+      285 +        String name = (nickname == null || nickname.isEmpty())
+          + ? userId : nickname;                                         
+      286 +        return userId.equals(myId()) ? name + " (나)" : name; 
+      287 +    }                                                         
+      288 +                                                              
+      289 +    private String myId() {                                   
+      290 +        return mainFrame.getCurrentUser().getId();            
+      291 +    }                                                         
+      292  }
+
+● Now compiling to verify.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Compiles clean (javac 21, 0 errors). The app can't be launched end-to-end yet
+  (the other panels' initLayout still throw, and the data files are empty), so I
+  wrote an isolated smoke test that drives the rendering paths directly:
+
+  Made 1 scratchpad edit +93, searched for 1 pattern, ran 3 shell commands (ctrl+o to expand)
+
+● Updating the status doc, per its own §6 convention:
+
+● Update(documents\08_status.md)
+  ⎿  Added 1 line, removed 1 line
+       4  쓰면 반드시 서로 어긋납니다.
+       5  
+       6  > **기준: 2026-07-23, 작업 트리 기준(미커밋 변경 포함)**
+       7 -> Java 21 / 소스 62개 / **`javac` 에러 0개 확인** / 코드 내 `TO
+         -DO` **31개**                                                   
+       7 +> Java 21 / 소스 62개 / **`javac` 에러 0개 확인** / 코드 내 `TO
+         +DO` **17개**                                                   
+       8  >
+       9  > ⚠️ 이 문서가 오래됐다고 느껴지면 **코드가 정답**입니다:
+      10  > ```powershell
+● Update(documents\08_status.md)
+  ⎿  Added 1 line, removed 1 line
+      21  | 통신 프로토콜 (`model/protocol/`) | 🟩 **완료** |
+      22  | 서버 (`server/`) | 🟩 **완료** — 핸들러 17개 + 푸시까지 동작 
+          |
+      23  | 클라이언트 통신 (`client/CT/`) | 🟩 **완료** |
+      24 -| GUI (`client/GUI/`) | 🟨 **15개 중 7개 완료** — 남은 것 8개  
+         -화면 28곳 |                                                    
+      24 +| GUI (`client/GUI/`) | 🟨 **15개 중 12개 완료** — 남은 것 3개 
+         +화면 15곳 |                                                    
+      25  | 추천 3종 | 🟨 **2개 완료** — 할 거 추천 판단 규칙 1개 남음 |
+      26  | **데이터 파일** | 🟥 **전부 비어 있음 (0바이트)** — 테스트하
+          려면 반드시 채워야 함 |
+      27  
+
+● Update(documents\08_status.md)
+  ⎿  Added 15 lines, removed 3 lines
+      56    - 채팅 전송 시 같은 방의 다른 접속자에게 `CHAT_MESSAGE_PUSH`
+      57    - 공지 등록 시 대상 접속자에게 `NOTICE_PUSH`
+      58  
+      59 -### GUI (완성된 화면 7개 + 셸)                                 
+      60 -`MainFrame`, `LoginPanel`, `RegisterPanel`, `PostListPanel`, `N
+         -oticePostEditorPanel`,                                         
+      61 -`ComplaintPanel`, `UserEditPanel`, `AdminPanel`                
+      59 +### GUI (완성된 화면 12개 + 셸)                                
+      60 +`MainFrame`, `LoginPanel`, `RegisterPanel`, `HomePanel`, `PostL
+         +istPanel`, `NoticePostEditorPanel`,                            
+      61 +`ComplaintPanel`, `UserEditPanel`, `AdminPanel`, `RecommendPane
+         +l`,                                                            
+      62 +**채팅 3종** `ChatRoomListPanel`, `ChatRoomCreatePanel`, `ChatR
+         +oomPanel`                                                      
+      63  
+      64 +채팅 화면에서 확정한 것(코드 주석에도 적어둠):                 
+      65 +                                                               
+      66 +- **내가 보낸 메시지는 화면에 직접 넣는다.** 서버가 보낸 사람에
+         +게는 `CHAT_MESSAGE_PUSH`를                                     
+      67 +  보내지 않으므로(`ClientHandler.handleChatSend`) 기다려도 오지
+         + 않는다.                                                       
+      68 +- **가입 신청(`CHATROOM_JOIN_REQUEST`)은 `ChatRoomListPanel`에 
+         +서 보낸다.** 참여자가 아닌 방을                                
+      69 +  열면 서버가 `CHAT_SEND`를 거부하므로, 목록에서 "들어가기"를  
+         +눌렀을 때 참여자가 아니면                                      
+      70 +  가입 신청 메세지를 받아 보낸다. 승인/거절은 방장이 채팅방 화 
+         +면 오른쪽에서 처리한다.                                        
+      71 +- **`ChatRoomPanel`에 새로고침을 뒀다.** 들고 있는 `ChatRoom`은
+         + `CHATROOM_LIST` 시점의                                        
+      72 +  사본이라 그 뒤 들어온 가입 신청·채팅이 없다. 방 하나만 받는  
+         +요청이 없어서 `CHATROOM_LIST`에서                              
+      73 +  같은 `roomId`를 다시 찾는다.                                 
+      74 +                                                               
+      75  ### 추천
+      76  - **책 추천기** — 완전 동작
+      77  - **메뉴 추천기** — 완전 동작 (오늘의 학식 / 랜덤 2개 / 꿀팁)
+
+● Update(documents\08_status.md)
+  ⎿  Error editing file
+
+● A teammate edited the same table concurrently — merging on top of their change
+  rather than overwriting:
+
+● Update(documents\08_status.md)
+  ⎿  Added 2 lines, removed 3 lines
+      79  
+      80  ---
+      81  
+      82 -## 3. 남은 작업 — 코드 `TODO` 31개                             
+      82 +## 3. 남은 작업 — 코드 `TODO` 17개                             
+      83  
+      84  전부 `TODO: 구현 필요`로 표시되어 있습니다.
+      85  
+      86 -### 3-1. GUI (28개) — 난이도 하~중                             
+      86 +### 3-1. GUI (15개) — 난이도 하~중                             
+      87  
+      88  | 화면 | 파일 | 남은 것 | 개수 |
+      89  |---|---|---|:---:|
+      90 -| `home` | `HomePanel` | `openChatRoomList()`, `openRecommend()
+         -` — **`switchTo` 한 줄씩이면 끝** | 2 |                        
+      90  | `postDetail` | `PostDetailPanel` | `initLayout`, `renderPost(
+          )`, `openEditor()`, 삭제 후 전환, 댓글 추가 후 갱신, 댓글 삭제 
+          후 갱신 | 6 |
+      91  | `postEditor` | `PostEditorPanel` | `initLayout`, `open()`의 
+          기존 값 채우기, 저장 후 전환, `generateId()` | 4 |
+      92  | `groupBuyPostEditor` | `GroupBuyPostEditorPanel` | `initLayou
+          t`, `open()` 채우기, 저장 후 전환, `generateId()` | 4 |
+
+● Update(documents\08_status.md)
+  ⎿  Added 5 lines, removed 4 lines
+       90  | `postDetail` | `PostDetailPanel` | `initLayout`, `renderPost
+           ()`, `openEditor()`, 삭제 후 전환, 댓글 추가 후 갱신, 댓글 삭
+           제 후 갱신 | 6 |
+       91  | `postEditor` | `PostEditorPanel` | `initLayout`, `open()`의 
+           기존 값 채우기, 저장 후 전환, `generateId()` | 4 |
+       92  | `groupBuyPostEditor` | `GroupBuyPostEditorPanel` | `initLayo
+           ut`, `open()` 채우기, 저장 후 전환, `generateId()` | 4 |
+       93 -| `chatRoomList` | `ChatRoomListPanel` | `initLayout`, `render
+          -Rooms()` | 2 |                                                
+       94 -| `chatRoomCreate` | `ChatRoomCreatePanel` | `initLayout`, 생 
+          -성 성공 후 전환 | 2 |                                         
+       95 -| `chatRoom` | `ChatRoomPanel` | `initLayout`, `renderMessages
+          -()`, `onPush()` 반영, 전송 후 반영, 승인/거절 후 갱신 | 6 |   
+       96 -| `recommend` | `RecommendPanel` | `initLayout` (탭 3개 구성) 
+          -| 1 |                                                         
+       93  
+       94 +> ⚠️ 남은 3개 화면의 `initLayout`이 아직 `UnsupportedOperationE
+          +xception`을 던집니다.                                         
+       95 +> `MainFrame.main()`이 화면 15개를 **전부 생성해서** 등록하므 
+          +로, 하나라도 남아 있으면                                      
+       96 +> **클라이언트가 아예 뜨지 않습니다.** 채팅 화면을 실제 화면에
+          +서 확인하려면 이 3개가 먼저                                   
+       97 +> 끝나야 합니다(§4-2 데이터 파일도 함께).                     
+       98 +                                                              
+       99  > **`generateId()`는 규칙이 이미 정해졌습니다** — `UUID.random
+           UUID().toString()`.
+      100  > `NoticePostEditorPanel` / `ComplaintPanel`에 구현되어 있으니
+            그대로 복사하세요.
+      101  >
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 채팅 3종 + HomePanel 연결까지 전부 구현했습니다. 전체 javac 통과(에러 0), 서버
+  없이 렌더링 경로만 돌리는 스모크 테스트로 동작 확인했습니다.
+
+  구현한 것
+
+  ChatRoomPanel (client/GUI/ChatRoomPanel.java) — 가장 큰 덩어리
+  - initLayout — 위 제목 / 가운데 채팅 로그(JTextArea, 읽기전용·자동 줄바꿈·항상
+  최신줄로 스크롤) / 오른쪽 가입신청 패널 / 아래 입력창+버튼. 엔터로도
+  전송됩니다.
+  - renderMessages() — [HH:mm] 이름: 내용 형식. 이름은 room.getNickname()이
+  있으면 그걸, 없으면 학번, 내 메시지엔 (나). 방장일 때만 오른쪽 가입신청
+  목록(학번 — 지원메세지)이 보이고 비방장이면 숨겨집니다.
+  - onPush() — SwingUtilities.invokeLater로 감싸 room.sendChat(chat) + 재렌더.
+  큐에 들어가 있는 사이 다른 방으로 옮겨갔을 수 있어 invokeLater 안에서 roomId를
+  한 번 더 확인합니다.
+  - sendMessage()의 결정 — 보낸 메시지는 화면에 직접 넣습니다.
+  ClientHandler.handleChatSend:469가 보낸 사람만 푸시 대상에서 빼기 때문에
+  기다려도 영영 안 옵니다. 빈 입력은 무시하고, 성공했을 때만 반영합니다.
+  - approveJoin/rejectJoin — 응답 상태를 확인해 실패면 서버 메시지를 그대로
+  띄우고, 성공했을 때만 로컬 사본에도 같은 처리를 반영 후 재렌더.
+  - 추가한 것: 새로고침 버튼. 들고 있는 ChatRoom은 CHATROOM_LIST 시점의 사본이라
+  그 뒤 들어온 가입신청·채팅이 안 보입니다. 방 하나만 받는 요청이 없어
+  CHATROOM_LIST에서 같은 roomId를 다시 찾습니다. 이게 없으면 승인/거절을 시연할
+  방법 자체가 없었습니다.
+
+  ChatRoomListPanel — PostListPanel과 같은 구성(제목/JList+렌더러/버튼줄),
+  더블클릭 지원. 한 줄에 [방번호] 방장 · 인원 n/최대 · 학번·학과·기숙사 제한 · 
+  참여중/승인 대기중.
+
+  ChatRoomCreatePanel — RegisterPanel 폼 패턴. 생성 성공 시 서버가 채번한 방으로
+  open() → switchTo("chatRoom")(방장은 서버가 바로 참여자로 넣어줍니다).
+
+  HomePanel.openChatRoomList() — refresh() 후 switchTo.
+
+  판단해서 넣은 것 (알려드립니다)
+
+  1. 가입 신청 흐름을 목록 화면에 넣었습니다. CHATROOM_JOIN_REQUEST를 호출하는
+  화면이 GUI 전체에 하나도 없어서, 그대로 두면 pendingJoinRequests가 항상 비어
+  승인/거절이 죽은 코드가 됩니다. 참여자가 아닌 방에서 "들어가기"를 누르면 지원
+  메세지를 받아 신청을 보냅니다(참여자가 아니면 서버가 CHAT_SEND를 거부하므로
+  그냥 들여보내면 막다른 길입니다).
+  2. ChatRoomCreatePanel에 뒤로 버튼과 정원 입력 검증. 기존 Integer.parseInt는
+  빈칸/오타에서 NumberFormatException으로 EDT가 터졌습니다.
+  3. documents/08_status.md를 문서 §6 절차대로 갱신했습니다(TODO 31→17, 채팅
+  3종을 §2로 이동, 확정 사항 기록). 작업 중 다른 분이 같은 표를 고치셔서 그 변경
+  위에 병합했습니다.
+
+  확인 못 한 것
+
+  실제 화면으로는 못 띄웠습니다.
+  PostDetailPanel/PostEditorPanel/GroupBuyPostEditorPanel의 initLayout이 아직
+  예외를 던지는데 MainFrame.main()이 화면 15개를 전부 생성해서 등록하므로
+  클라이언트가 시작되지 않고, server/data/users.dat도 0바이트라 로그인이 안
+  됩니다. 그래서 리플렉션으로 renderMessages/renderRooms와 셀 렌더러를 직접
+  호출하는 스모크 테스트로 검증했습니다 — 세 화면 생성, 채팅 렌더링,
+  방장/비방장에 따른 가입신청 패널 표시, 목록 줄 표시가 모두 의도대로
+  나왔습니다. 저 3개 화면과 데이터 파일이 채워지면 실제 화면 확인이 가능합니다.
+
+✻ Churned for 6m 56s

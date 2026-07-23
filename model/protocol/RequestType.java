@@ -2,7 +2,7 @@ package model.protocol;
 
 /**
  * 클라이언트-서버 간 오가는 모든 Packet의 종류. 각 상수에 요청/응답 payload 타입을 고정해두었다.
- * 새 기능이 필요하면 이 enum에 상수를 추가하고 documents/protocol.md의 표도 함께 갱신할 것 —
+ * 새 기능이 필요하면 이 enum에 상수를 추가하고 documents/05_protocol.md의 표도 함께 갱신할 것 —
  * ClientHandler에서 임의로 새 타입을 만들어 쓰지 않는다.
  */
 public enum RequestType {
@@ -38,6 +38,20 @@ public enum RequestType {
 
     /** 요청 payload: {@link model.protocol.CommentDeleteRequest}. 응답 payload: 없음 */
     COMMENT_DELETE,
+
+    /**
+     * 첨부파일/이미지를 서버에 올린다. 게시글을 저장(POST_CREATE/POST_UPDATE)하기 <b>전에</b> 먼저 보내고,
+     * 응답으로 받은 경로를 Post.filePath/imagePath에 넣는다.
+     * 요청 payload: {@link model.protocol.FileTransfer}. 응답 payload: {@code String}(서버 저장 경로)
+     */
+    FILE_UPLOAD,
+
+    /**
+     * 첨부파일/이미지를 내려받는다 (상세 화면의 이미지 표시 / 다른 이름으로 저장).
+     * 요청 payload: {@code String}(FILE_UPLOAD가 돌려준 저장 경로 = Post.filePath/imagePath 값).
+     * 응답 payload: {@link model.protocol.FileTransfer}
+     */
+    FILE_DOWNLOAD,
 
     /** 요청 payload: {@code model.ChatRoom}(생성할 방의 초기값). 응답 payload: {@code model.ChatRoom}(roomId 채번 결과) */
     CHATROOM_CREATE,

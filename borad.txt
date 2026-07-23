@@ -1,0 +1,462 @@
+ ▐▛███▜▌   Claude Code v2.1.218
+▝▜█████▛▘  Opus 4.8 · Claude Pro
+  ▘▘ ▝▝    C:\Projects\Java_summer_p
+
+
+❯                                                                               
+  게시판 담당 팀원에게 넘길 파일은 이렇습니다 (서버 쪽 handleXxx와              
+  ChatRoom/NoticeBoard/NoticePost는 이미 다 구현되어 있어서, 실제 남은 게시판   
+  관련 TODO는 이 정도로 좁혀졌습니다):                                          
+                                                                                
+  모델 계층 (model/boards/)                                                     
+  GroupBuyPost.java:51 — getCurrentMemberCount(ChatRoom)                        
+  GroupBuyBoard.java:21 — filterByHashtag(String)                               
+                                                                                
+  GUI 화면 (client/GUI/) — 게시글 목록/상세/작성 관련                           
+  PostListPanel.java — initLayout, renderPosts()(목록 그리기), openEditor()     
+  PostDetailPanel.java — initLayout, renderPost(), 수정/삭제/댓글 버튼 연결     
+  PostEditorPanel.java — initLayout, 기존 글 값 채우기, generateId()            
+  GroupBuyPostEditorPanel.java — 위와 동일 + 채팅방 연동 여부                   
+  NoticePostEditorPanel.java — 공지 작성/수정 (관리자 담당과 겹칠 수 있음 — 팀  
+  역할 분담에 따라)                                                             
+  HomePanel.java의 openFreeBoard/openGroupBuyBoard/openDepartmentBoard/openDorm 
+  Board/openNoticeBoard — 각 게시판 버튼이 PostListPanel.open(boardKey)을       
+  부르는 부분                                                                   
+                                                                                
+  ComplaintPanel.java(민원)은 게시판이라기보단 별도 기능으로 보는 팀이 많아서,  
+  담당을 게시판 팀원과 나눌지 따로 뺄지는 팀 회의에서 정하시면 됩니다.          
+                                                                                
+  넘길 때는 documents/gui.md(화면 패턴 + §3 TODO 표)와                          
+  documents/datastruct.md(Post/Board 필드 스펙)를 같이 주고, "이 파일들의       
+  TODO만 채워라"라고 지시하면 됩니다.                                           
+
+  Searched for 2 patterns, read 4 files, ran 2 shell commands (ctrl+o to expand)
+
+● 확인해봤더니 넘길 목록 중 상당 부분이 이미 끝나 있고, 문서 파일명도 바뀌어
+  있습니다. 실제 코드 기준으로 정리하면:
+
+  목록에서 빼야 할 것 (이미 구현 완료, TODO 0개)
+
+  - PostListPanel.java — initLayout, renderPosts(),
+  openEditor()(공용/공동구매/공지/민원 분기까지), openSelectedPost() 전부 구현됨
+  - NoticePostEditorPanel.java — 작성/수정, 대상 학과·기숙사 공지, 첨부,
+  generateId()까지 완료
+  - ComplaintPanel.java — 구현 완료. 분담을 나눌지 논의할 필요 자체가 없습니다
+  - HomePanel의 openFreeBoard/openGroupBuyBoard/openDepartmentBoard/openDormBoar
+  d/openNoticeBoard — 전부 openBoard(...) → PostListPanel.open(boardKey, 
+  "home")으로 연결 완료. HomePanel에 남은 TODO 2개는 openChatRoomList(),
+  openRecommend()로 게시판이 아니라 채팅/추천 담당 몫입니다
+
+  실제로 남은 게시판 TODO — 17곳
+
+  ┌────────────────────────────────────┬─────────────────────────────┬─────┐
+  │                파일                │           남은 것           │ 개  │
+  │                                    │                             │ 수  │
+  ├────────────────────────────────────┼─────────────────────────────┼─────┤
+  │                                    │ initLayout, renderPost(),   │     │
+  │ client/GUI/PostDetailPanel.java    │ openEditor(), 삭제 후 전환, │  6  │
+  │                                    │  댓글 추가/삭제 후 갱신     │     │
+  ├────────────────────────────────────┼─────────────────────────────┼─────┤
+  │                                    │ initLayout, open() 기존 값  │     │
+  │ client/GUI/PostEditorPanel.java    │ 채우기, 저장 후 전환,       │  4  │
+  │                                    │ generateId()                │     │
+  ├────────────────────────────────────┼─────────────────────────────┼─────┤
+  │ client/GUI/GroupBuyPostEditorPanel │ 위와 동일 + 채팅방 연동     │  5  │
+  │ .java                              │                             │     │
+  ├────────────────────────────────────┼─────────────────────────────┼─────┤
+  │ model/boards/GroupBuyPost.java:51  │ getCurrentMemberCount(ChatR │  1  │
+  │                                    │ oom)                        │     │
+  ├────────────────────────────────────┼─────────────────────────────┼─────┤
+  │ model/boards/GroupBuyBoard.java:21 │ filterByHashtag(String)     │  1  │
+  └────────────────────────────────────┴─────────────────────────────┴─────┘
+
+  generateId()는 규칙이 이미 UUID.randomUUID().toString()으로 정해져 있고
+  NoticePostEditorPanel:187, ComplaintPanel에 있으니 그대로 복사하면 됩니다.
+  initLayout도 참고할 완성본이 8개 있습니다.
+
+  주의: GroupBuyPostEditorPanel:53의 채팅방 연동은 혼자 정할 수 없습니다 —
+  08_status.md §4-1의 미해결 설계 항목(클라가 CHATROOM_CREATE+POST_CREATE 두 번
+  요청 vs 서버가 handlePostCreate 안에서 원자적으로 생성)이 먼저 결정돼야
+  합니다. 팀 회의 안건으로 올리고, 결정 전까지는 나머지 4곳만 진행하게 하세요.
+
+  같이 넘길 문서 (파일명 변경됨)
+
+  - documents/gui.md → documents/06_gui.md (화면 패턴·전환 컨벤션)
+  - documents/datastruct.md → documents/04_data_model.md (Post/Board 필드 스펙)
+  - 추가로 documents/08_status.md — TODO 표는 이제 06_gui.md §3이 아니라 여기
+  있습니다 (§3 남은 작업, §4 미해결 설계, §5 분담안). §6에 "끝내면 문서 갱신하는
+  법"도 있으니 이걸 지시에 포함시키세요.
+
+  ⚠️ 지금 documents/는 git에 커밋 안 된 상태입니다 (구 파일 7개는 삭제 스테이징,
+  새 documents/는 untracked). 이대로 push하면 팀원이 문서를 못 받습니다 — git 
+  add documents/ 후 커밋하고 넘기세요.
+
+  지시문은 이 정도면 됩니다: "PostDetailPanel, PostEditorPanel, 
+  GroupBuyPostEditorPanel, GroupBuyPost, GroupBuyBoard의 TODO: 구현 필요만 
+  채워라. 채팅방 연동(GroupBuyPostEditorPanel:53)은 회의 결정 전까지 보류. 
+  문서는 04_data_model.md, 06_gui.md, 08_status.md 참고."
+
+  커밋까지 해둘까요?
+
+✻ Cooked for 57s
+
+❯ 서버가 handlePostCreate 안에서 원자적으로 생성 구현해.                        
+
+  Searched for 1 pattern, read 4 files, ran 2 shell commands (ctrl+o to expand)
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 16 lines
+      294              throw new IllegalStateException("이미 존재하는 게
+           시글 id입니다: " + post.getId());
+      295          }
+      296  
+      297 +        // 공동구매 글에는 참여자 채팅방이 반드시 딸려야 한다.
+          + 클라이언트가 CHATROOM_CREATE와                               
+      298 +        // POST_CREATE를 따로 보내면 그 사이에 끊겼을 때 주인 
+          +없는 채팅방이 남으므로, 이 요청                               
+      299 +        // 하나(=DATA_LOCK 한 번) 안에서 방까지 만든다. 클라이
+          +언트가 채워 보낸 chatRoomId는                                 
+      300 +        // 신뢰하지 않고 항상 서버가 채번한 값으로 덮어쓴다.  
+      301 +        ChatRoom linkedRoom = null;                           
+      302 +        if (post instanceof GroupBuyPost) {                   
+      303 +            GroupBuyPost groupBuyPost = (GroupBuyPost) post;  
+      304 +            linkedRoom = createLinkedChatRoom(groupBuyPost);  
+      305 +            groupBuyPost.setChatRoomId(linkedRoom.getRoomId())
+          +;                                                             
+      306 +        }                                                     
+      307 +                                                              
+      308          board.addPost(post);
+      309          board.save();
+      310 +        if (linkedRoom != null) {                             
+      311 +            // 게시글 저장이 끝난 뒤에 등록한다 — board.save()
+          +가 실패하면 채팅방은 아직                                     
+      312 +            // dataStore에 들어가지 않은 상태라 고아 방이 남지
+          + 않는다.                                                      
+      313 +            dataStore.addChatRoom(linkedRoom);                
+      314 +        }                                                     
+      315  
+      316          if (post instanceof NoticePost) {
+      317              NoticePost notice = (NoticePost) post;
+
+● Now the helper and the update path:
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 8 lines, removed 3 lines
+      336          stored.setImagePath(incoming.getImagePath());
+      337          if (stored instanceof GroupBuyPost && incoming instanc
+           eof GroupBuyPost) {
+      338              GroupBuyPost storedGroupBuy = (GroupBuyPost) store
+           d;
+      339 -            GroupBuyPost incomingGroupBuy = (GroupBuyPost) inc
+          -oming;                                                        
+      340 -            storedGroupBuy.setMaxMembers(incomingGroupBuy.getM
+          -axMembers());                                                 
+      341 -            storedGroupBuy.setChatRoomId(incomingGroupBuy.getC
+          -hatRoomId());                                                 
+      339 +            int maxMembers = requireGroupBuyMaxMembers(((Group
+          +BuyPost) incoming).getMaxMembers());                          
+      340 +            storedGroupBuy.setMaxMembers(maxMembers);         
+      341 +            // chatRoomId는 POST_CREATE에서 서버가 정한 뒤로  
+          +바뀌지 않는다 — 클라이언트가 보낸                             
+      342 +            // 값으로 덮어쓰면 남의 방을 가리키게 만들거나 연 
+          +결을 끊어버릴 수 있다.                                        
+      343 +            // 대신 정원은 "현재 인원수 = 채팅방 참여자 수" 규
+          +칙이 깨지지 않도록 방에도 반영한다.                           
+      344 +            ChatRoom linkedRoom = dataStore.getChatRoom(stored
+          +GroupBuy.getChatRoomId());                                    
+      345 +            linkedRoom.setMaxMembers(maxMembers);             
+      346 +            dataStore.saveChatRoom(linkedRoom);               
+      347          }
+      348          board.save();
+      349          return Packet.success(request, null);
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 24 lines
+      533          }
+      534      }
+      535  
+      536 +    /**                                                       
+      537 +     * 공동구매 글에 딸리는 채팅방을 만든다 (아직 dataStore에 
+          +등록하지는 않는다).                                           
+      538 +     * 방장 = 글쓴이, 정원 = 글의 maxMembers — "현재 인원수 = 
+          +채팅방 참여자 수"(02_requirements §3.1)가                     
+      539 +     * 성립하려면 두 값이 같아야 한다. 가입 제한(학번/학과/기 
+          +숙사)은 걸지 않는다 —                                         
+      540 +     * 공동구매는 게시판을 볼 수 있는 사람이면 누구나 참여할  
+          +수 있어야 한다.                                               
+      541 +     */                                                       
+      542 +    private ChatRoom createLinkedChatRoom(GroupBuyPost post) {
+      543 +        ChatRoom room = new ChatRoom(nextRoomId(), currentUser
+          +.getId(),                                                     
+      544 +                requireGroupBuyMaxMembers(post.getMaxMembers()
+          +));                                                           
+      545 +        room.getMemberIds().add(currentUser.getId()); // 글쓴 
+          +이가 방장 겸 첫 참여자                                        
+      546 +        return room;                                          
+      547 +    }                                                         
+      548 +                                                              
+      549 +    /**                                                       
+      550 +     * 글쓴이가 이미 참여자로 들어가므로 정원이 1이면 만들자마
+          +자 가득 차서 아무도 못 들어온다.                              
+      551 +     * 무제한(-1)이 아니라면 최소 2명이어야 한다.             
+      552 +     */                                                       
+      553 +    private int requireGroupBuyMaxMembers(int maxMembers) {   
+      554 +        if (maxMembers != -1 && maxMembers < 2) {             
+      555 +            throw new IllegalArgumentException("공동구매 최대 
+          +인원은 2명 이상이어야 합니다 (무제한은 -1)");                 
+      556 +        }                                                     
+      557 +        return maxMembers;                                    
+      558 +    }                                                         
+      559 +                                                              
+      560      private void requireAccess(Board board, String boardKey) {
+      561          if (!board.canAccess(currentUser)) {
+      562              throw new IllegalStateException("접근 권한이 없는 
+           게시판입니다: " + boardKey);
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Update(client\GUI\GroupBuyPostEditorPanel.java)
+  ⎿  Added 2 lines, removed 1 line
+      56          GroupBuyPost post;
+      57          if (isNew) {
+      58              List<String> hashtags = new ArrayList<>(Arrays.asLi
+          st(hashtagsField.getText().split(",")));
+      59 -            // TODO: 구현 필요. 연결할 채팅방(chatRoomId)을 CHA
+         -TROOM_CREATE로 먼저 만들지, 어떻게 연결할지 정해야 한다.       
+      59 +            // chatRoomId는 null로 두면 된다 — 서버가 POST_CREA
+         +TE 안에서 채팅방을 만들어 채운 뒤                              
+      60 +            // 그 게시글을 응답으로 돌려준다 (CHATROOM_CREATE를
+         + 따로 보내지 말 것).                                           
+      61              post = new GroupBuyPost(generateId(), titleField.ge
+          tText(), authorId, contentArea.getText(),
+      62                      attachmentPicker.getFilePath(), attachmentP
+          icker.getImagePath(), LocalDateTime.now(),
+      63                      Integer.parseInt(maxMembersField.getText())
+          , null, hashtags);
+
+● Now updating the status doc so the handoff matches:
+
+● Update(documents\08_status.md)
+  ⎿  Added 1 line, removed 1 line
+      90  | `home` | `HomePanel` | `openChatRoomList()`, `openRecommend()
+          ` — **`switchTo` 한 줄씩이면 끝** | 2 |
+      91  | `postDetail` | `PostDetailPanel` | `initLayout`, `renderPost(
+          )`, `openEditor()`, 삭제 후 전환, 댓글 추가 후 갱신, 댓글 삭제 
+          후 갱신 | 6 |
+      92  | `postEditor` | `PostEditorPanel` | `initLayout`, `open()`의 
+          기존 값 채우기, 저장 후 전환, `generateId()` | 4 |
+      93 -| `groupBuyPostEditor` | `GroupBuyPostEditorPanel` | `initLayou
+         -t`, `open()` 채우기, **채팅방 연동(§4-1)**, 저장 후 전환, `gene
+         -rateId()` | 5 |                                                
+      93 +| `groupBuyPostEditor` | `GroupBuyPostEditorPanel` | `initLayou
+         +t`, `open()` 채우기, 저장 후 전환, `generateId()` | 4 |        
+      94  | `chatRoomList` | `ChatRoomListPanel` | `initLayout`, `renderR
+          ooms()` | 2 |
+      95  | `chatRoomCreate` | `ChatRoomCreatePanel` | `initLayout`, 생성
+           성공 후 전환 | 2 |
+      96  | `chatRoom` | `ChatRoomPanel` | `initLayout`, `renderMessages(
+          )`, `onPush()` 반영, 전송 후 반영, 승인/거절 후 갱신 | 6 |
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+● Update(documents\08_status.md)
+  ⎿  Added 19 lines, removed 12 lines
+      124  
+      125  ## 4. 미해결 설계 항목 (논의 필요)
+      126  
+      127 -### 4-1. 공동구매 ↔ 채팅방 자동 연동 🔴 우선순위 높음         
+      127 +### 4-1. ~~공동구매 ↔ 채팅방 자동 연동~~ ✅ B안으로 결정·구현 
+          +완료                                                          
+      128  
+      129 -공동구매 글을 쓰면 채팅방이 자동 생성되어 연결되어야 하는데   
+      130 -([02_requirements.md §3.1](02_requirements.md)), **순서가 아직
+          - 정해지지 않았습니다.**                                       
+      129 +**서버가 `handlePostCreate` 안에서 채팅방까지 만듭니다** (요청
+          + 한 번 = `DATA_LOCK` 한 번이라                                
+      130 +중간에 끊겨도 고아 채팅방이 남지 않음). 클라이언트가 `CHATROOM
+          +_CREATE`를 따로 보내면 안 됩니다.                             
+      131  
+      132 -현재 코드는 `CHATROOM_CREATE` → `POST_CREATE` 두 번 요청하는  
+          -방법밖에 없습니다.                                            
+      133 -그런데 그 사이에 클라이언트가 죽으면 **주인 없는 채팅방이 남습
+          -니다.**                                                       
+      132 +확정된 규칙:                                                  
+      133  
+      135 -| 후보 | 장점 | 단점 |                                        
+      136 -|---|---|---|                                                 
+      137 -| A. 클라이언트가 두 번 요청 | 서버 수정 없음 | 중간에 끊기면 
+          -고아 채팅방 |                                                 
+      138 -| B. 서버가 `POST_CREATE` 안에서 `GroupBuyPost`면 채팅방까지  
+          -생성 | 원자적, 고아 없음 | `handlePostCreate`가 복잡해짐 |    
+      134 +| 항목 | 규칙 |                                               
+      135 +|---|---|                                                     
+      136 +| roomId | 서버가 `nextRoomId()`로 채번. 클라이언트가 보낸 `ch
+          +atRoomId`는 **무시하고 덮어쓴다** |                           
+      137 +| 방장 | 글쓴이. 생성 즉시 참여자로도 들어간다 |              
+      138 +| 정원 | 글의 `maxMembers`를 그대로 방 정원으로 (§3.1 "현재 인
+          +원수 = 채팅방 참여자 수") |                                   
+      139 +| 가입 제한 | 걸지 않는다 — 게시판을 볼 수 있으면 누구나 참여 
+          +가능 |                                                        
+      140 +| `maxMembers` 검증 | `-1`(무제한) 또는 **2 이상**. 글쓴이가  
+          +이미 1명이라 1이면 만들자마자 가득 참 |                       
+      141 +| 저장 순서 | `board.save()` 성공 → `dataStore.addChatRoom()`.
+          + 게시글 저장이 실패하면 방은 등록 자체가 안 됨 |              
+      142 +| `POST_UPDATE` | `chatRoomId`는 **클라이언트 값으로 덮어쓰지 
+          +않는다**(남의 방 가리키기/연결 끊기 방지).                    
+      143 +`maxMembers`를 바꾸면 연결된 방의 정원도 같이 바뀐다 |        
+      144  
+      140 -**B를 권장합니다.** `handlePostCreate`가 이미 `post instanceof
+          - NoticePost`로 분기해서                                       
+      141 -푸시를 보내고 있으므로, 같은 자리에 `GroupBuyPost` 분기를 넣으
+          -면 됩니다.                                                    
+      142 -`maxMembers`를 그대로 채팅방 정원으로 쓰면 "현재 인원수 = 채팅
+          -방 인원수" 규칙과도 맞습니다.                                 
+      145 +클라이언트는 `chatRoomId`를 `null`로 두고 `POST_CREATE`만 보내
+          +면 되고, 응답으로 오는                                        
+      146 +`GroupBuyPost`에 서버가 채운 `chatRoomId`가 들어 있습니다.    
+      147  
+      148 +> 남은 것: **공동구매 글을 지울 때 연결된 채팅방을 어떻게 할지
+          +**는 아직 안 정했습니다.                                      
+      149 +> 현재 `handlePostDelete`는 방을 그대로 둡니다(채팅 기록 보존)
+          +. 같이 지울지 팀에서 결정하세요.                              
+      150 +                                                              
+      151  ### 4-2. 데이터 파일이 전부 비어 있음 🔴 우선순위 높음
+      152  
+      153  **`server/data/**` 와 `client/recommend_data/**` 의 모든 파일
+           이 0바이트입니다.**
+
+● Update(documents\08_status.md)
+  ⎿  Added 1 line, removed 2 lines
+      139  | 가입 제한 | 걸지 않는다 — 게시판을 볼 수 있으면 누구나 참여 
+           가능 |
+      140  | `maxMembers` 검증 | `-1`(무제한) 또는 **2 이상**. 글쓴이가 
+           이미 1명이라 1이면 만들자마자 가득 참 |
+      141  | 저장 순서 | `board.save()` 성공 → `dataStore.addChatRoom()`.
+            게시글 저장이 실패하면 방은 등록 자체가 안 됨 |
+      142 -| `POST_UPDATE` | `chatRoomId`는 **클라이언트 값으로 덮어쓰지 
+          -않는다**(남의 방 가리키기/연결 끊기 방지).                    
+      143 -`maxMembers`를 바꾸면 연결된 방의 정원도 같이 바뀐다 |        
+      142 +| `POST_UPDATE` | `chatRoomId`는 **클라이언트 값으로 덮어쓰지 
+          +않는다**(남의 방 가리키기/연결 끊기 방지). `maxMembers`를 바꾸
+          +면 연결된 방의 정원도 같이 바뀐다 |                           
+      143  
+      144  클라이언트는 `chatRoomId`를 `null`로 두고 `POST_CREATE`만 보내
+           면 되고, 응답으로 오는
+      145  `GroupBuyPost`에 서버가 채운 `chatRoomId`가 들어 있습니다.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(documents\08_status.md)
+  ⎿  Added 1 line, removed 1 line
+       4  쓰면 반드시 서로 어긋납니다.
+       5  
+       6  > **기준: 2026-07-23, 작업 트리 기준(미커밋 변경 포함)**
+       7 -> Java 21 / 소스 62개 / **`javac` 에러 0개 확인** / 코드 내 `TO
+         -DO` **17개**                                                   
+       7 +> Java 21 / 소스 62개 / **`javac` 에러 0개 확인** / 코드 내 `TO
+         +DO` **16개**                                                   
+       8  >
+       9  > ⚠️ 이 문서가 오래됐다고 느껴지면 **코드가 정답**입니다:
+      10  > ```powershell
+
+● Update(documents\08_status.md)
+  ⎿  Added 2 lines, removed 2 lines
+      79  
+      80  ---
+      81  
+      82 -## 3. 남은 작업 — 코드 `TODO` 17개                             
+      82 +## 3. 남은 작업 — 코드 `TODO` 16개                             
+      83  
+      84  전부 `TODO: 구현 필요`로 표시되어 있습니다.
+      85  
+      86 -### 3-1. GUI (15개) — 난이도 하~중                             
+      86 +### 3-1. GUI (14개) — 난이도 하~중                             
+      87  
+      88  | 화면 | 파일 | 남은 것 | 개수 |
+      89  |---|---|---|:---:|
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(server\CT\ClientHandler.java)
+  ⎿  Added 6 lines, removed 3 lines
+      341              // chatRoomId는 POST_CREATE에서 서버가 정한 뒤로 
+           바뀌지 않는다 — 클라이언트가 보낸
+      342              // 값으로 덮어쓰면 남의 방을 가리키게 만들거나 연
+           결을 끊어버릴 수 있다.
+      343              // 대신 정원은 "현재 인원수 = 채팅방 참여자 수" 규
+           칙이 깨지지 않도록 방에도 반영한다.
+      344 -            ChatRoom linkedRoom = dataStore.getChatRoom(stored
+          -GroupBuy.getChatRoomId());                                    
+      345 -            linkedRoom.setMaxMembers(maxMembers);             
+      346 -            dataStore.saveChatRoom(linkedRoom);               
+      344 +            // 연동 도입 전에 저장된 .dat 줄에는 chatRoomId가 
+          +비어 있을 수 있다 — 그런 글은 건너뛴다.                       
+      345 +            if (!isBlank(storedGroupBuy.getChatRoomId())) {   
+      346 +                ChatRoom linkedRoom = dataStore.getChatRoom(st
+          +oredGroupBuy.getChatRoomId());                                
+      347 +                linkedRoom.setMaxMembers(maxMembers);         
+      348 +                dataStore.saveChatRoom(linkedRoom);           
+      349 +            }                                                 
+      350          }
+      351          board.save();
+      352          return Packet.success(request, null);
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● B안으로 구현했습니다. javac 전체 컴파일 에러 0개.
+
+  server/CT/ClientHandler.java
+
+  handlePostCreate — 검증을 다 통과한 뒤, 게시글 저장 직전에 채팅방을 만듭니다:
+
+  ChatRoom linkedRoom = null;
+  if (post instanceof GroupBuyPost) {
+      GroupBuyPost groupBuyPost = (GroupBuyPost) post;
+      linkedRoom = createLinkedChatRoom(groupBuyPost);
+      groupBuyPost.setChatRoomId(linkedRoom.getRoomId());
+  }
+  board.addPost(post);
+  board.save();
+  if (linkedRoom != null) {
+      dataStore.addChatRoom(linkedRoom);
+  }
+
+  POST_CREATE는 이미 SYNCHRONIZED_TYPES에 있어서 DATA_LOCK 하나로 전부
+  감싸집니다 — 별도 락 작업은 필요 없었습니다.
+
+  저장 순서를 board.save() → addChatRoom()으로 잡은 이유: 채팅방 객체는
+  dataStore에 넣기 전까지 메모리에만 있으므로, 게시글 저장이 실패하면 방은
+  등록도 파일 생성도 되지 않습니다. 반대 순서면 게시글 저장 실패 시 고아 방이
+  남습니다.
+
+  createLinkedChatRoom (신규 헬퍼) — nextRoomId()로 채번, 방장 = 글쓴이(생성
+  즉시 참여자로 추가), 정원 = 글의 maxMembers. 가입 제한(학번/학과/기숙사)은
+  걸지 않았습니다 — 게시판을 볼 수 있으면 누구나 참여할 수 있어야 하니까요.
+
+  requireGroupBuyMaxMembers (신규 헬퍼) — -1(무제한)이 아니면 2 이상을
+  요구합니다. 글쓴이가 이미 참여자 1명이라 정원이 1이면 만들자마자 isFull()이
+  되어 아무도 못 들어옵니다. 이건 요구사항에 명시가 없어 제가 정한 부분이니,
+  팀에서 다르게 보면 이 메서드만 고치면 됩니다.
+
+  함께 고친 곳
+
+  handlePostUpdate — 기존에
+  storedGroupBuy.setChatRoomId(incoming.getChatRoomId())가 있었습니다. 이제
+  서버가 연결을 소유하므로 이 줄을 지웠습니다(안 지우면 클라이언트가 남의 방을
+  가리키게 만들거나 연결을 끊어버릴 수 있어 방금 만든 불변식이 무의미해집니다).
+  대신 maxMembers를 바꾸면 연결된 방의 정원도 같이 바꿔서 "현재 인원수 = 채팅방
+  참여자 수"를 유지합니다. 연동 도입 전 데이터(빈 chatRoomId)는 건너뜁니다.
+
+  client/GUI/GroupBuyPostEditorPanel.java:59 — 결정 대기 상태였던 TODO를 지우고,
+  "chatRoomId는 null로 두면 서버가 채워서 응답으로 돌려준다"는 설명으로
+  바꿨습니다. 이 파일 TODO가 5개 → 4개로 줄었습니다.
+
+  documents/08_status.md — §4-1을 "B안 결정·구현 완료"로 바꾸고 확정 규칙 표를
+  넣었습니다. §3 TODO 개수도 16개로 맞췄습니다.
+
+  결정 안 된 채 남은 것
+
+  공동구매 글을 지울 때 연결된 채팅방 처리 — 지금 handlePostDelete는 방을 그대로
+  둡니다(채팅 기록 보존). 같이 지우면 참여자들의 대화가 사라지고, 두면 목록에
+  글 없는 방이 남습니다. §4-1 하단에 메모해뒀으니 팀에서 정하세요.
+
+✻ Sautéed for 3m 59s

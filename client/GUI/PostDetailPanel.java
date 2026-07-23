@@ -1,15 +1,20 @@
 package client.GUI;
 
+import java.io.File;
 import java.time.LocalDateTime;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 
+import client.CT.FileTransferClient;
 import model.boards.Comment;
 import model.boards.Post;
 import model.protocol.CommentAddRequest;
 import model.protocol.CommentDeleteRequest;
+import model.protocol.FileTransfer;
 import model.protocol.Packet;
 import model.protocol.PostDeleteRequest;
 import model.protocol.RequestType;
@@ -48,9 +53,37 @@ public class PostDetailPanel extends JPanel {
     }
 
     /** post의 필드/댓글을 화면에 채우고, post.canEdit(mainFrame.getCurrentUser())/canDelete(...)에 따라
-     *  editButton/deleteButton 노출 여부를 정하는 부분 — 렌더링은 자유. */
+     *  editButton/deleteButton 노출 여부를 정하는 부분 — 렌더링은 자유.
+     *  첨부는 post.getFilePath()/getImagePath()가 null이 아닐 때만 버튼을 띄우고
+     *  saveAttachment(경로) / loadImage(경로)를 연결하면 된다. */
     private void renderPost() {
         throw new UnsupportedOperationException("TODO: 구현 필요");
+    }
+
+    /** 첨부를 서버에서 받아 사용자가 고른 위치에 저장한다. 원본 파일명이 기본값으로 채워진다. */
+    private void saveAttachment(String storedPath) {
+        try {
+            FileTransfer attachment = FileTransferClient.download(mainFrame.getConnection(), storedPath);
+            JFileChooser chooser = new JFileChooser();
+            chooser.setSelectedFile(new File(attachment.getFileName()));
+            if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+                return;
+            }
+            FileTransferClient.saveTo(attachment, chooser.getSelectedFile().toPath());
+            JOptionPane.showMessageDialog(this, "저장했습니다: " + chooser.getSelectedFile().getName(),
+                    "첨부 저장", JOptionPane.INFORMATION_MESSAGE);
+        } catch (RuntimeException e) {
+            JOptionPane.showMessageDialog(this, e.getMessage(), "첨부 내려받기 실패", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /** 첨부 이미지를 화면에 바로 붙일 수 있는 형태로 받아온다. 실패하면 null(= 이미지 영역을 감춘다). */
+    private ImageIcon loadImage(String storedPath) {
+        try {
+            return new ImageIcon(FileTransferClient.download(mainFrame.getConnection(), storedPath).getData());
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private void openEditor() {

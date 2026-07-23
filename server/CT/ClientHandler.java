@@ -3,16 +3,21 @@ package server.CT;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.UncheckedIOException;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.UUID;
 
 import model.Chat;
 import model.ChatRoom;
+import model.FileStorage;
 import model.User;
 import model.boards.Board;
 import model.boards.Comment;
@@ -29,6 +34,7 @@ import model.protocol.ChatRoomJoinRequest;
 import model.protocol.ChatSendRequest;
 import model.protocol.CommentAddRequest;
 import model.protocol.CommentDeleteRequest;
+import model.protocol.FileTransfer;
 import model.protocol.LoginRequest;
 import model.protocol.Packet;
 import model.protocol.PostCreateOrUpdateRequest;
@@ -42,6 +48,9 @@ import server.board.DataStore;
  */
 public class ClientHandler implements Runnable {
     // CUD에 해당하는 요청은 DATA_LOCK으로 감싸서 처리한다. 순수 조회(POST_LIST)는 감싸지 않는다.
+    // FILE_UPLOAD는 파일을 쓰지만 여기 넣지 않는다 — 매번 새 이름(UUID)으로만 저장해서 서로 겹치지
+    // 않고 메모리 상의 게시판/유저도 건드리지 않는데, 최대 5MB 쓰기를 락 안에서 하면 그동안 다른
+    // 모든 CUD가 멈추기 때문이다.
     private static final Set<RequestType> SYNCHRONIZED_TYPES = EnumSet.of(
             RequestType.REGISTER, RequestType.USER_UPDATE,
             RequestType.POST_CREATE, RequestType.POST_UPDATE, RequestType.POST_DELETE,
@@ -49,6 +58,9 @@ public class ClientHandler implements Runnable {
             RequestType.CHATROOM_CREATE, RequestType.CHATROOM_JOIN_REQUEST,
             RequestType.CHATROOM_JOIN_APPROVE, RequestType.CHATROOM_JOIN_REJECT,
             RequestType.CHAT_SEND);
+
+    /** 업로드된 첨부파일/이미지가 쌓이는 곳. 게시판 .dat들과 같은 server/data 아래에 둔다. */
+    private static final Path UPLOAD_DIR = Path.of("server/data/files");
 
     private static final Object DATA_LOCK = new Object();
 
@@ -132,6 +144,10 @@ public class ClientHandler implements Runnable {
                 return handleCommentAdd(request);
             case COMMENT_DELETE:
                 return handleCommentDelete(request);
+            case FILE_UPLOAD:
+                return handleFileUpload(request);
+            case FILE_DOWNLOAD:
+                return handleFileDownload(request);
             case CHATROOM_CREATE:
                 return handleChatRoomCreate(request);
             case CHATROOM_JOIN_REQUEST:
@@ -278,8 +294,24 @@ public class ClientHandler implements Runnable {
             throw new IllegalStateException("이미 존재하는 게시글 id입니다: " + post.getId());
         }
 
+        // 공동구매 글에는 참여자 채팅방이 반드시 딸려야 한다. 클라이언트가 CHATROOM_CREATE와
+        // POST_CREATE를 따로 보내면 그 사이에 끊겼을 때 주인 없는 채팅방이 남으므로, 이 요청
+        // 하나(=DATA_LOCK 한 번) 안에서 방까지 만든다. 클라이언트가 채워 보낸 chatRoomId는
+        // 신뢰하지 않고 항상 서버가 채번한 값으로 덮어쓴다.
+        ChatRoom linkedRoom = null;
+        if (post instanceof GroupBuyPost) {
+            GroupBuyPost groupBuyPost = (GroupBuyPost) post;
+            linkedRoom = createLinkedChatRoom(groupBuyPost);
+            groupBuyPost.setChatRoomId(linkedRoom.getRoomId());
+        }
+
         board.addPost(post);
         board.save();
+        if (linkedRoom != null) {
+            // 게시글 저장이 끝난 뒤에 등록한다 — board.save()가 실패하면 채팅방은 아직
+            // dataStore에 들어가지 않은 상태라 고아 방이 남지 않는다.
+            dataStore.addChatRoom(linkedRoom);
+        }
 
         if (post instanceof NoticePost) {
             NoticePost notice = (NoticePost) post;
@@ -304,9 +336,17 @@ public class ClientHandler implements Runnable {
         stored.setImagePath(incoming.getImagePath());
         if (stored instanceof GroupBuyPost && incoming instanceof GroupBuyPost) {
             GroupBuyPost storedGroupBuy = (GroupBuyPost) stored;
-            GroupBuyPost incomingGroupBuy = (GroupBuyPost) incoming;
-            storedGroupBuy.setMaxMembers(incomingGroupBuy.getMaxMembers());
-            storedGroupBuy.setChatRoomId(incomingGroupBuy.getChatRoomId());
+            int maxMembers = requireGroupBuyMaxMembers(((GroupBuyPost) incoming).getMaxMembers());
+            storedGroupBuy.setMaxMembers(maxMembers);
+            // chatRoomId는 POST_CREATE에서 서버가 정한 뒤로 바뀌지 않는다 — 클라이언트가 보낸
+            // 값으로 덮어쓰면 남의 방을 가리키게 만들거나 연결을 끊어버릴 수 있다.
+            // 대신 정원은 "현재 인원수 = 채팅방 참여자 수" 규칙이 깨지지 않도록 방에도 반영한다.
+            // 연동 도입 전에 저장된 .dat 줄에는 chatRoomId가 비어 있을 수 있다 — 그런 글은 건너뛴다.
+            if (!isBlank(storedGroupBuy.getChatRoomId())) {
+                ChatRoom linkedRoom = dataStore.getChatRoom(storedGroupBuy.getChatRoomId());
+                linkedRoom.setMaxMembers(maxMembers);
+                dataStore.saveChatRoom(linkedRoom);
+            }
         }
         board.save();
         return Packet.success(request, null);
@@ -356,6 +396,43 @@ public class ClientHandler implements Runnable {
         post.removeComment(post.getComments().get(index), currentUser); // 권한 검사는 Post가 수행
         board.save();
         return Packet.success(request, null);
+    }
+
+    /**
+     * 첨부를 server/data/files 아래에 "UUID_원본이름"으로 저장하고 그 경로를 돌려준다.
+     * 클라이언트는 이 경로를 Post.filePath/imagePath에 넣어 POST_CREATE/POST_UPDATE를 보낸다.
+     * 이름 앞에 UUID를 붙이는 이유는 서로 다른 사람이 같은 이름("사진.png")으로 올려도 덮어쓰지 않게 하기 위해서다.
+     */
+    private Packet handleFileUpload(Packet request) {
+        requireLogin();
+        FileTransfer upload = (FileTransfer) request.getPayload();
+        if (upload.size() == 0) {
+            throw new IllegalArgumentException("빈 파일은 첨부할 수 없습니다");
+        }
+        if (upload.size() > FileTransfer.MAX_BYTES) {
+            throw new IllegalArgumentException("첨부는 최대 5MB까지 가능합니다");
+        }
+        String storedName = UUID.randomUUID() + "_" + sanitizeFileName(upload.getFileName());
+        try {
+            FileStorage.writeBytes(UPLOAD_DIR.resolve(storedName), upload.getData());
+        } catch (IOException e) {
+            throw new UncheckedIOException("첨부 저장 실패: " + upload.getFileName(), e);
+        }
+        // 이 값이 .dat 한 줄에 그대로 들어가므로 OS별 구분자(\)가 아니라 항상 '/'로 맞춘다.
+        return Packet.success(request, UPLOAD_DIR.toString().replace('\\', '/') + "/" + storedName);
+    }
+
+    private Packet handleFileDownload(Packet request) {
+        requireLogin();
+        String storedPath = (String) request.getPayload();
+        Path target = resolveUpload(storedPath);
+        try {
+            return Packet.success(request,
+                    new FileTransfer(originalFileName(target.getFileName().toString()),
+                            FileStorage.readBytes(target)));
+        } catch (IOException e) {
+            throw new UncheckedIOException("첨부 읽기 실패: " + storedPath, e);
+        }
     }
 
     private Packet handleChatRoomCreate(Packet request) {
@@ -459,6 +536,30 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    /**
+     * 공동구매 글에 딸리는 채팅방을 만든다 (아직 dataStore에 등록하지는 않는다).
+     * 방장 = 글쓴이, 정원 = 글의 maxMembers — "현재 인원수 = 채팅방 참여자 수"(02_requirements §3.1)가
+     * 성립하려면 두 값이 같아야 한다. 가입 제한(학번/학과/기숙사)은 걸지 않는다 —
+     * 공동구매는 게시판을 볼 수 있는 사람이면 누구나 참여할 수 있어야 한다.
+     */
+    private ChatRoom createLinkedChatRoom(GroupBuyPost post) {
+        ChatRoom room = new ChatRoom(nextRoomId(), currentUser.getId(),
+                requireGroupBuyMaxMembers(post.getMaxMembers()));
+        room.getMemberIds().add(currentUser.getId()); // 글쓴이가 방장 겸 첫 참여자
+        return room;
+    }
+
+    /**
+     * 글쓴이가 이미 참여자로 들어가므로 정원이 1이면 만들자마자 가득 차서 아무도 못 들어온다.
+     * 무제한(-1)이 아니라면 최소 2명이어야 한다.
+     */
+    private int requireGroupBuyMaxMembers(int maxMembers) {
+        if (maxMembers != -1 && maxMembers < 2) {
+            throw new IllegalArgumentException("공동구매 최대 인원은 2명 이상이어야 합니다 (무제한은 -1)");
+        }
+        return maxMembers;
+    }
+
     private void requireAccess(Board board, String boardKey) {
         if (!board.canAccess(currentUser)) {
             throw new IllegalStateException("접근 권한이 없는 게시판입니다: " + boardKey);
@@ -472,6 +573,43 @@ public class ClientHandler implements Runnable {
             throw new IllegalStateException("방장만 사용할 수 있는 기능입니다: " + roomId);
         }
         return room;
+    }
+
+    /**
+     * 업로드된 이름을 그대로 파일명으로 쓰면 두 가지가 깨진다:
+     * (1) "../users.dat" 같은 이름으로 엉뚱한 곳에 쓰기, (2) DataFormat의 구분자(| , ^ ; :)가
+     * 이름에 들어가면 이 경로를 담은 게시글 .dat 한 줄이 통째로 깨진다. 그래서 화이트리스트로 거른다.
+     */
+    private static String sanitizeFileName(String name) {
+        String bare = name == null ? "" : name;
+        int lastSeparator = Math.max(bare.lastIndexOf('/'), bare.lastIndexOf('\\'));
+        bare = bare.substring(lastSeparator + 1);
+        bare = bare.replaceAll("[^\\w.\\-가-힣]", "_"); // 영숫자/_/./-/한글만 남기고 전부 '_'
+        if (bare.isEmpty() || bare.equals(".") || bare.equals("..")) {
+            return "attachment";
+        }
+        return bare;
+    }
+
+    /** 저장 이름 "UUID_원본이름"에서 원본 이름만 되돌린다 (UUID에는 '_'가 없어서 첫 '_'가 경계). */
+    private static String originalFileName(String storedName) {
+        int separator = storedName.indexOf('_');
+        return separator >= 0 && separator < storedName.length() - 1
+                ? storedName.substring(separator + 1)
+                : storedName;
+    }
+
+    /** 클라이언트가 보낸 경로에서 파일명만 취해 업로드 폴더 안으로 한정한다 (다른 파일 열람 방지). */
+    private Path resolveUpload(String storedPath) {
+        if (isBlank(storedPath)) {
+            throw new IllegalArgumentException("첨부 경로가 비어 있습니다");
+        }
+        int lastSeparator = Math.max(storedPath.lastIndexOf('/'), storedPath.lastIndexOf('\\'));
+        Path target = UPLOAD_DIR.resolve(storedPath.substring(lastSeparator + 1)).normalize();
+        if (!target.startsWith(UPLOAD_DIR) || !Files.isRegularFile(target)) {
+            throw new NoSuchElementException("첨부를 찾을 수 없음: " + storedPath);
+        }
+        return target;
     }
 
     private Post findPost(Board board, String postId) {

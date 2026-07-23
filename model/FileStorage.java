@@ -23,6 +23,20 @@ public final class FileStorage {
         Files.write(path, lines);
     }
 
+    /** 첨부파일/이미지처럼 텍스트가 아닌 파일용. 없는 파일이면 NoSuchFileException. */
+    public static byte[] readBytes(Path path) throws IOException {
+        return Files.readAllBytes(path);
+    }
+
+    /** 첨부 저장 폴더(server/data/files)는 처음 업로드될 때 만들어지므로 상위 폴더를 함께 생성한다. */
+    public static void writeBytes(Path path, byte[] data) throws IOException {
+        Path parent = path.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.write(path, data);
+    }
+
     private FileStorage() {
     }
 }

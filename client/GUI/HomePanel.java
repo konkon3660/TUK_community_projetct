@@ -21,7 +21,7 @@ import model.protocol.ResponseStatus;
  * 게시판 6종/채팅방/추천/로그아웃으로 가는 허브. 서버 통신은 없고 순수 네비게이션만 담당한다 —
  * 각 버튼이 어느 화면을 여는지는 TODO. 다른 화면으로 데이터와 함께 전환할 때는
  * mainFrame.getScreen("이름")을 캐스팅해서 open(...)을 먼저 호출한 뒤 mainFrame.switchTo("이름")을
- * 부르는 컨벤션을 따른다 (documents/gui.md 참고).
+ * 부르는 컨벤션을 따른다 (documents/06_gui.md 참고).
  */
 public class HomePanel extends JPanel {
     private final MainFrame mainFrame;
@@ -66,7 +66,7 @@ public class HomePanel extends JPanel {
         c.insets = new Insets(6, 6, 20, 6);
         menu.add(title, c);
         // 관리자 버튼은 없다 — 관리자는 로그인 직후 "admin"으로 가고 이 화면에 오지 않는다
-        // (documents/gui.md §2 학생/관리자 완전 분리). 또 initLayout은 생성자에서(=로그인 전에)
+        // (documents/06_gui.md §2 학생/관리자 완전 분리). 또 initLayout은 생성자에서(=로그인 전에)
         // 돌기 때문에 여기서 getCurrentUser()를 보면 null이다.
 
         // 게시판 6종을 2열로, 그 아래 채팅방/추천, 맨 아래 로그아웃.
@@ -130,12 +130,16 @@ public class HomePanel extends JPanel {
         mainFrame.switchTo("complaint");
     }
 
+    /** 채팅방 목록은 열 때마다 서버에서 다시 받아온다 (다른 사람이 만든 방이 바로 보이도록). */
     private void openChatRoomList() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        ((ChatRoomListPanel) mainFrame.getScreen("chatRoomList")).refresh();
+        mainFrame.switchTo("chatRoomList");
     }
 
     private void openRecommend() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
+        // RecommendPanel도 넘겨줄 데이터가 없어서 open(...) 없이 바로 전환한다.
+        // 추천 데이터는 화면이 보여질 때(componentShown) RecommendPanel이 알아서 다시 읽는다.
+        mainFrame.switchTo("recommend");
     }
 
     private void logout() {

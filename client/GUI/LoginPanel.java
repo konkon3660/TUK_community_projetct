@@ -99,7 +99,7 @@ public class LoginPanel extends JPanel {
             User user = (User) response.getPayload();
             mainFrame.setCurrentUser(user);
             passwordField.setText(""); // 로그아웃 후 다시 돌아왔을 때 비번이 남아있지 않도록
-            // 관리자는 학생 화면(home)에 들어가면 안 된다 — documents/gui.md §2
+            // 관리자는 학생 화면(home)에 들어가면 안 된다 — documents/06_gui.md §2
             mainFrame.switchTo(user.isAdmin() ? "admin" : "home");
         } else {
             passwordField.setText("");

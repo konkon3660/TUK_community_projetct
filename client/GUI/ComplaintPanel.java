@@ -31,12 +31,15 @@ public class ComplaintPanel extends JPanel {
     private final JTextField category1Field = new JTextField();
     private final JTextField category2Field = new JTextField();
     private final JTextArea contentArea = new JTextArea();
+    // 민원의 추가 항목은 "이미지 첨부"만이라 파일 첨부 버튼은 띄우지 않는다 (02_requirements.md §4).
+    private final AttachmentPicker attachmentPicker;
     private final JButton submitButton = new JButton("제출");
     private final JButton myComplaintsButton = new JButton("내 문의 내역");
     private final JButton backButton = new JButton("뒤로");
 
     public ComplaintPanel(MainFrame mainFrame) {
         this.mainFrame = mainFrame;
+        this.attachmentPicker = new AttachmentPicker(mainFrame, false);
         submitButton.addActionListener(e -> submit());
         myComplaintsButton.addActionListener(e -> openMyComplaints());
         backButton.addActionListener(e -> mainFrame.switchTo("home"));
@@ -96,11 +99,15 @@ public class ComplaintPanel extends JPanel {
         body.add(head, BorderLayout.NORTH);
         body.add(new JScrollPane(contentArea), BorderLayout.CENTER);
 
+        JPanel foot = new JPanel(new BorderLayout(0, 6));
+        foot.add(attachmentPicker, BorderLayout.NORTH);
+
         JPanel buttons = new JPanel();
         buttons.add(submitButton);
         buttons.add(myComplaintsButton);
         buttons.add(backButton);
-        body.add(buttons, BorderLayout.SOUTH);
+        foot.add(buttons, BorderLayout.SOUTH);
+        body.add(foot, BorderLayout.SOUTH);
 
         add(body, BorderLayout.CENTER);
     }
@@ -108,7 +115,8 @@ public class ComplaintPanel extends JPanel {
     private void submit() {
         String authorId = mainFrame.getCurrentUser().getId();
         ComplaintPost post = new ComplaintPost(generateId(), titleField.getText(), authorId, contentArea.getText(),
-                null, null, LocalDateTime.now(), category1Field.getText(), category2Field.getText());
+                null, attachmentPicker.getImagePath(),
+                LocalDateTime.now(), category1Field.getText(), category2Field.getText());
         Packet request = Packet.request(RequestType.POST_CREATE, new PostCreateOrUpdateRequest(BoardKey.COMPLAINT, post));
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
@@ -126,6 +134,7 @@ public class ComplaintPanel extends JPanel {
         category1Field.setText("");
         category2Field.setText("");
         contentArea.setText("");
+        attachmentPicker.reset(null, null);
     }
 
     /** ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT, "home") 후 switchTo("postList"). */
