@@ -56,7 +56,8 @@ public class MainFrame extends JFrame {
     }
 
     /** 등록된 이름의 화면 인스턴스를 꺼낸다. switchTo 전에 그 화면의 open(...)을 호출해서
-     *  보여줄 데이터를 넘길 때 사용한다 (예: ((PostListPanel) mainFrame.getScreen("postList")).open(boardKey)). */
+     *  보여줄 데이터를 넘길 때 사용한다
+     *  (예: ((PostListPanel) mainFrame.getScreen("postList")).open(boardKey, "home")). */
     public JPanel getScreen(String name) {
         return screensByName.get(name);
     }

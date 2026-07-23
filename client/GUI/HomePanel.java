@@ -4,11 +4,11 @@ import javax.swing.JButton;
 import javax.swing.JPanel;
 
 /**
- * 로그인 성공 후 첫 화면. 게시판 6종/채팅방/추천/관리자(관리자만)/로그아웃으로 가는 허브.
- * 서버 통신은 없고 순수 네비게이션만 담당한다 — 각 버튼이 어느 화면을 여는지는 TODO.
- * 다른 화면으로 데이터와 함께 전환할 때는 mainFrame.getScreen("이름")을 캐스팅해서
- * open(...)을 먼저 호출한 뒤 mainFrame.switchTo("이름")을 부르는 컨벤션을 따른다
- * (documents/gui.md 참고).
+ * 로그인 성공 후 첫 화면(학생 전용 — 관리자는 이 화면에 오지 않고 "admin"으로 바로 간다).
+ * 게시판 6종/채팅방/추천/로그아웃으로 가는 허브. 서버 통신은 없고 순수 네비게이션만 담당한다 —
+ * 각 버튼이 어느 화면을 여는지는 TODO. 다른 화면으로 데이터와 함께 전환할 때는
+ * mainFrame.getScreen("이름")을 캐스팅해서 open(...)을 먼저 호출한 뒤 mainFrame.switchTo("이름")을
+ * 부르는 컨벤션을 따른다 (documents/gui.md 참고).
  */
 public class HomePanel extends JPanel {
     private final MainFrame mainFrame;
@@ -20,7 +20,6 @@ public class HomePanel extends JPanel {
     private final JButton complaintButton = new JButton("민원");
     private final JButton chatRoomListButton = new JButton("채팅방");
     private final JButton recommendButton = new JButton("추천");
-    private final JButton adminButton = new JButton("관리자");
     private final JButton logoutButton = new JButton("로그아웃");
 
     public HomePanel(MainFrame mainFrame) {
@@ -33,12 +32,11 @@ public class HomePanel extends JPanel {
         complaintButton.addActionListener(e -> openComplaint());
         chatRoomListButton.addActionListener(e -> openChatRoomList());
         recommendButton.addActionListener(e -> openRecommend());
-        adminButton.addActionListener(e -> openAdmin());
         logoutButton.addActionListener(e -> logout());
         initLayout();
     }
 
-    /** 위 버튼들을 배치하는 부분(관리자 버튼은 mainFrame.getCurrentUser().isAdmin()일 때만 보이게 등) — 디자인은 자유. */
+    /** 위 버튼들을 배치하는 부분 — 디자인은 자유. */
     private void initLayout() {
         throw new UnsupportedOperationException("TODO: 구현 필요");
     }
@@ -72,10 +70,6 @@ public class HomePanel extends JPanel {
     }
 
     private void openRecommend() {
-        throw new UnsupportedOperationException("TODO: 구현 필요");
-    }
-
-    private void openAdmin() {
         throw new UnsupportedOperationException("TODO: 구현 필요");
     }
 

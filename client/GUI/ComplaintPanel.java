@@ -14,7 +14,7 @@ import model.protocol.PostCreateOrUpdateRequest;
 import model.protocol.RequestType;
 import model.protocol.ResponseStatus;
 
-/** 민원 작성 화면. "내 문의 내역"은 PostListPanel.open(BoardKey.COMPLAINT)를 재사용해서 보여준다. */
+/** 민원 작성 화면(학생 전용). "내 문의 내역"은 PostListPanel.open(BoardKey.COMPLAINT, "home")을 재사용해서 보여준다. */
 public class ComplaintPanel extends JPanel {
     private final MainFrame mainFrame;
     private final JTextField titleField = new JTextField();
@@ -51,7 +51,7 @@ public class ComplaintPanel extends JPanel {
         }
     }
 
-    /** ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT) 후 switchTo("postList"). */
+    /** ((PostListPanel) mainFrame.getScreen("postList")).open(BoardKey.COMPLAINT, "home") 후 switchTo("postList"). */
     private void openMyComplaints() {
         throw new UnsupportedOperationException("TODO: 구현 필요");
     }

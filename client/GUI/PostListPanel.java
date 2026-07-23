@@ -20,23 +20,29 @@ public class PostListPanel extends JPanel {
     private final JButton newPostButton = new JButton("글쓰기");
     private final JButton backButton = new JButton("뒤로");
     private String boardKey;
+    private String backTarget;
     private List<Post> posts;
 
     public PostListPanel(MainFrame mainFrame) {
         this.mainFrame = mainFrame;
         newPostButton.addActionListener(e -> openEditor());
-        backButton.addActionListener(e -> mainFrame.switchTo("home"));
+        backButton.addActionListener(e -> mainFrame.switchTo(backTarget));
         initLayout();
     }
 
-    /** newPostButton/backButton과 게시글 목록을 배치하는 부분 — 디자인은 자유. */
+    /** newPostButton/backButton과 게시글 목록을 배치하는 부분 — 디자인은 자유. 단,
+     *  관리자가 게시글 관리/민원함 목적으로 연 경우(backTarget이 "admin")는 글쓰기가
+     *  학생 행위이므로 newPostButton을 숨기거나 비활성화할 것. */
     private void initLayout() {
         throw new UnsupportedOperationException("TODO: 구현 필요");
     }
 
-    /** mainFrame.switchTo("postList") 전에 반드시 먼저 호출해서 어느 게시판을 보여줄지 지정한다. */
-    public void open(String boardKey) {
+    /** mainFrame.switchTo("postList") 전에 반드시 먼저 호출해서 어느 게시판을 보여줄지 지정한다.
+     *  backTarget은 뒤로가기를 눌렀을 때 돌아갈 화면 이름 — 학생이 열 때는 "home", 관리자가
+     *  게시글 관리/민원함으로 열 때는 "admin"을 넘긴다 (관리자가 학생 화면에 갇히지 않도록). */
+    public void open(String boardKey, String backTarget) {
         this.boardKey = boardKey;
+        this.backTarget = backTarget;
         Packet request = Packet.request(RequestType.POST_LIST, boardKey);
         Packet response = mainFrame.getConnection().sendRequest(request);
         if (response.getStatus() == ResponseStatus.OK) {
