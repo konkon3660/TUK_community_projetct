@@ -1,7 +1,9 @@
-package model;
+package model.boards;
 
 import java.util.List;
 import java.util.stream.Collectors;
+
+import model.User;
 
 public class ComplaintBoard extends AbstractBoard {
     private static final String DATA_FILE_PATH = "server/data/boards/complaint_board.dat";
@@ -22,5 +24,10 @@ public class ComplaintBoard extends AbstractBoard {
         return posts.stream()
                 .filter(p -> p.getAuthorId().equals(userId))
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    protected Post parsePost(String line) {
+        return ComplaintPost.fromDataString(line);
     }
 }

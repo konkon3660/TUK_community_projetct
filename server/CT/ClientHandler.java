@@ -10,6 +10,7 @@ import java.util.Set;
 import model.User;
 import model.protocol.Packet;
 import model.protocol.RequestType;
+import server.board.DataStore;
 
 /**
  * 클라이언트 소켓 하나당 스레드 하나. 패킷을 읽어 type으로 분기하고, 실제 업무 로직은
@@ -28,12 +29,14 @@ public class ClientHandler implements Runnable {
     private static final Object DATA_LOCK = new Object();
 
     private final Socket socket;
+    private final DataStore dataStore;
     private ObjectOutputStream out;
     private ObjectInputStream in;
     private User currentUser; // 로그인 성공 시 세팅 (세팅하는 로직은 handleLogin의 TODO)
 
-    public ClientHandler(Socket socket) {
+    public ClientHandler(Socket socket, DataStore dataStore) {
         this.socket = socket;
+        this.dataStore = dataStore;
     }
 
     public User getCurrentUser() {

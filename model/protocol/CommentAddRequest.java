@@ -2,7 +2,7 @@ package model.protocol;
 
 import java.io.Serializable;
 
-import model.Comment;
+import model.boards.Comment;
 
 public class CommentAddRequest implements Serializable {
     private static final long serialVersionUID = 1L;

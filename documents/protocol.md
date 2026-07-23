@@ -11,8 +11,8 @@
 
 * 클라이언트-서버는 소켓 하나를 계속 열어두는 **영속적 연결** 위에서 `Packet` 객체를
   `ObjectOutputStream`/`ObjectInputStream`으로 직렬화해 주고받습니다.
-* `model/`의 엔티티(`User`, `Post`와 하위 클래스, `Comment`, `Chat`, `ChatRoom`)는 모두
-  `Serializable`이라 `Packet.payload`에 그대로 담아 보낼 수 있습니다.
+* `model/`(`User`, `Chat`, `ChatRoom`)과 `model/boards/`(`Post`와 하위 클래스, `Comment`)의
+  엔티티는 모두 `Serializable`이라 `Packet.payload`에 그대로 담아 보낼 수 있습니다.
 * 프로토콜 클래스(`Packet`, `RequestType`, DTO들)는 `model/protocol/` 패키지 하나에만 있고
   `client/CT`, `server/CT` 양쪽에서 그대로 참조합니다 (빌드 시스템 없이 단일 컴파일 단위).
 
@@ -39,8 +39,8 @@
 | `REGISTER` | `model.User` | 없음 | |
 | `LOGOUT` | 없음 | 없음 | |
 | `USER_UPDATE` | `model.User`(수정 반영본) | 없음 | 관리자 전용 |
-| `POST_LIST` | `String`(boardKey) | `List<model.Post>` | 조회 전용 — synchronized 안 함 |
-| `POST_CREATE` | `PostCreateOrUpdateRequest` | `model.Post`(저장 결과) | |
+| `POST_LIST` | `String`(boardKey) | `List<model.boards.Post>` | 조회 전용 — synchronized 안 함 |
+| `POST_CREATE` | `PostCreateOrUpdateRequest` | `model.boards.Post`(저장 결과) | |
 | `POST_UPDATE` | `PostCreateOrUpdateRequest` | 없음 | |
 | `POST_DELETE` | `PostDeleteRequest` | 없음 | |
 | `COMMENT_ADD` | `CommentAddRequest` | 없음 | |
@@ -51,12 +51,12 @@
 | `CHATROOM_JOIN_REJECT` | `ChatRoomJoinDecision` | 없음 | 방장 전용 |
 | `CHAT_SEND` | `ChatSendRequest` | 없음 | |
 | `CHAT_MESSAGE_PUSH` | — | `ChatPushPayload` | 서버 전용 푸시 |
-| `NOTICE_PUSH` | — | `model.NoticePost` | 서버 전용 푸시 |
+| `NOTICE_PUSH` | — | `model.boards.NoticePost` | 서버 전용 푸시 |
 | `DISCONNECT` | 없음 | 없음 | 연결 종료 통지 |
 
-`boardKey`는 어떤 게시판 인스턴스인지 가리키는 문자열 식별자입니다 (`FreeBoard`류는 고정 키,
-`DepartmentBoard`는 학과명). 실제 게시판 레지스트리(문자열 → `Board` 인스턴스 매핑)는 이번
-범위 밖입니다.
+`boardKey`는 `model/protocol/BoardKey.java`에 고정된 문자열 상수입니다(`FreeBoard`류는
+`BoardKey.*`, `DepartmentBoard`는 학과명을 그대로 사용). 실제 게시판 레지스트리는
+`server/board/DataStore.java`(`getBoard(boardKey)`)에 있습니다.
 
 `COMMENT_DELETE`의 `commentIndex`는 해당 게시글 `comments` 리스트 내 위치(0부터)입니다.
 
@@ -94,9 +94,10 @@
 ## 6. 남은 작업
 
 * `server/CT/ClientHandler.java`의 `handleXxx` 메서드 15개 — 전부 `TODO: 구현 필요` 상태.
-  `model/User`, `model/Board` 계열, `model/ChatRoom`의 기존 메서드를 그대로 호출해서 채우면 됨.
-* 로그인한 사용자 조회, 게시판 인스턴스 registry, 다른 클라이언트에게 푸시를 뿌리는 로직
-  (`ClientHandler.sendPacket`은 있지만 "누구에게 보낼지" 찾는 부분)은 별도의 서버 쪽
-  registry/세션 계층이 필요 — 이번 스켈레톤 범위 밖.
-* `client/GUI`가 `client/CT/ServerConnection`을 사용해서 요청을 보내고,
-  `PushListener`를 구현해서 실시간 갱신을 받는 연결 코드는 GUI 설계 시 진행.
+  `dataStore` 필드(`server/board/DataStore`)로 게시판/유저/채팅방을 찾고, `model.User`,
+  `model.boards.*`, `model.ChatRoom`의 기존 메서드를 그대로 호출해서 채우면 됨.
+* 다른 클라이언트에게 푸시를 뿌리는 로직(`ClientHandler.sendPacket`은 있지만 "다른 클라이언트의
+  ClientHandler 인스턴스를 어떻게 찾을지"는 아직 없음 — 접속 중인 ClientHandler 목록을
+  관리하는 부분은 이번 스켈레톤 범위 밖).
+* `client/GUI`는 `client/CT/ServerConnection`을 사용해서 요청을 보내고 `PushListener`로 실시간
+  갱신을 받습니다 — `documents/gui.md`와 `client/GUI/LoginPanel.java` 참고.

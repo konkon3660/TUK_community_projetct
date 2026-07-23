@@ -2,7 +2,7 @@ package model.protocol;
 
 import java.io.Serializable;
 
-import model.Post;
+import model.boards.Post;
 
 /** boardKey로 대상 게시판을 식별 (예: "free", "dorm", "notice", "complaint", "groupbuy", 학과명 등) */
 public class PostCreateOrUpdateRequest implements Serializable {

@@ -1,4 +1,4 @@
-package model;
+package model.boards;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
@@ -8,12 +8,16 @@ import java.util.NoSuchElementException;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import model.DataFormat;
+import model.User;
+
 /**
  * 모든 게시글 타입(자유/공동구매/공지/민원 등)의 공통 기반 클래스.
+ * 추가 필드가 없는 게시글(자유/학과별/기숙사 게시판)은 이 클래스를 그대로 인스턴스화해서 쓴다.
  * 하위 클래스는 baseDataString()/splitFields()/parseComments()를 이용해
  * 공통 필드 + 자신만의 추가 필드를 이어 붙이는 방식으로 toDataString/fromDataString을 구현한다.
  */
-public abstract class Post implements Serializable {
+public class Post implements Serializable {
     private static final long serialVersionUID = 1L;
 
     protected final String id;
@@ -25,8 +29,8 @@ public abstract class Post implements Serializable {
     protected final List<Comment> comments;
     protected final LocalDateTime createdAt;
 
-    protected Post(String id, String title, String authorId, String content,
-                    String filePath, String imagePath, LocalDateTime createdAt) {
+    public Post(String id, String title, String authorId, String content,
+                String filePath, String imagePath, LocalDateTime createdAt) {
         this.id = id;
         this.title = title;
         this.authorId = authorId;
@@ -110,7 +114,19 @@ public abstract class Post implements Serializable {
         return requester.isAdmin() || requester.getId().equals(authorId);
     }
 
-    public abstract String toDataString();
+    /** 추가 필드가 없는 게시글(자유/학과별/기숙사)의 기본 구현. 하위 클래스는 오버라이드해서 자기 필드를 이어붙인다. */
+    public String toDataString() {
+        return baseDataString();
+    }
+
+    /** toDataString()이 baseDataString() 그대로인 경우(추가 필드 없는 Post)를 복원 */
+    public static Post fromDataString(String line) {
+        String[] f = splitFields(line);
+        Post post = new Post(f[0], f[1], f[2], f[3], emptyToNull(f[4]), emptyToNull(f[5]),
+                LocalDateTime.parse(f[6], DataFormat.DATETIME_FORMATTER));
+        post.getComments().addAll(parseComments(f[7]));
+        return post;
+    }
 
     /** 공통 필드 7개 + 인코딩된 댓글 목록을 FIELD_DELIM으로 이어붙임 (하위 클래스가 이어서 자기 필드를 붙임) */
     protected String baseDataString() {

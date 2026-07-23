@@ -1,4 +1,6 @@
-package model;
+package model.boards;
+
+import model.User;
 
 public class DepartmentBoard extends AbstractBoard {
     private final String restrictedDepartment;
@@ -22,5 +24,10 @@ public class DepartmentBoard extends AbstractBoard {
     @Override
     public String getDataFilePath() {
         return dataFilePath;
+    }
+
+    @Override
+    protected Post parsePost(String line) {
+        return Post.fromDataString(line);
     }
 }

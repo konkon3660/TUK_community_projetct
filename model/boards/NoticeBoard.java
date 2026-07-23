@@ -1,6 +1,8 @@
-package model;
+package model.boards;
 
 import java.util.List;
+
+import model.User;
 
 public class NoticeBoard extends AbstractBoard {
     private static final String DATA_FILE_PATH = "server/data/boards/notice_board.dat";
@@ -23,5 +25,10 @@ public class NoticeBoard extends AbstractBoard {
     /** 이 유저의 학과/기숙사 여부에 맞는 공지만 필터링해서 반환 */
     public List<Post> getVisiblePosts(User user) {
         throw new UnsupportedOperationException("TODO: 구현 필요");
+    }
+
+    @Override
+    protected Post parsePost(String line) {
+        return NoticePost.fromDataString(line);
     }
 }

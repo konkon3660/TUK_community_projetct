@@ -1,10 +1,13 @@
-package model;
+package model.boards;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import model.DataFormat;
+import model.User;
 
 public class NoticePost extends Post {
     private static final long serialVersionUID = 1L;

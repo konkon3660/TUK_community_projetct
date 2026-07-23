@@ -1,8 +1,11 @@
-package model;
+package model.boards;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.regex.Pattern;
+
+import model.DataFormat;
+import model.User;
 
 public class Comment implements Serializable {
     private static final long serialVersionUID = 1L;

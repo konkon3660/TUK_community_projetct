@@ -18,10 +18,10 @@ public enum RequestType {
     /** 요청 payload: {@code model.User}(수정 반영된 전체 정보), 관리자 전용. 응답 payload: 없음 */
     USER_UPDATE,
 
-    /** 요청 payload: {@code String}(boardKey). 응답 payload: {@code List<model.Post>} */
+    /** 요청 payload: {@code String}(boardKey). 응답 payload: {@code List<model.boards.Post>} */
     POST_LIST,
 
-    /** 요청 payload: {@link model.protocol.PostCreateOrUpdateRequest}. 응답 payload: {@code model.Post}(저장된 결과) */
+    /** 요청 payload: {@link model.protocol.PostCreateOrUpdateRequest}. 응답 payload: {@code model.boards.Post}(저장된 결과) */
     POST_CREATE,
 
     /** 요청 payload: {@link model.protocol.PostCreateOrUpdateRequest}. 응답 payload: 없음 */
@@ -54,7 +54,7 @@ public enum RequestType {
     /** 서버 전용 푸시(요청 없음). payload: {@link model.protocol.ChatPushPayload}(roomId + 새 Chat) */
     CHAT_MESSAGE_PUSH,
 
-    /** 서버 전용 푸시(요청 없음). payload: {@code model.NoticePost}(새로 등록된 공지) */
+    /** 서버 전용 푸시(요청 없음). payload: {@code model.boards.NoticePost}(새로 등록된 공지) */
     NOTICE_PUSH,
 
     /** 연결 종료 통지. 요청/응답 payload 없음 */

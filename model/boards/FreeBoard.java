@@ -1,4 +1,6 @@
-package model;
+package model.boards;
+
+import model.User;
 
 public class FreeBoard extends AbstractBoard {
     private static final String DATA_FILE_PATH = "server/data/boards/free_board.dat";
@@ -11,5 +13,10 @@ public class FreeBoard extends AbstractBoard {
     @Override
     public String getDataFilePath() {
         return DATA_FILE_PATH;
+    }
+
+    @Override
+    protected Post parsePost(String line) {
+        return Post.fromDataString(line);
     }
 }

@@ -1,6 +1,8 @@
-package model;
+package model.boards;
 
 import java.time.LocalDateTime;
+
+import model.DataFormat;
 
 public class ComplaintPost extends Post {
     private static final long serialVersionUID = 1L;
