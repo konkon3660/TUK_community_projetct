@@ -168,7 +168,7 @@ public class ChatRoomListPanel extends JPanel {
                 || room.getOwnerId().toLowerCase().contains(query);
     }
 
-    /** 선택한 방으로 들어간다. 아직 참여자가 아니면 먼저 가입 신청을 보낸다
+    /** 선택한 방으로 들어간다. 아직 참여자가 아니면 먼저 가입 절차를 탄다
      *  (참여자가 아니면 서버가 CHAT_SEND를 거부하므로 그냥 들여보내면 아무것도 못 한다). */
     private void openSelectedRoom() {
         ChatRoom selected = roomJList.getSelectedValue();
@@ -180,12 +180,27 @@ public class ChatRoomListPanel extends JPanel {
             requestJoin(selected);
             return;
         }
-        ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open(selected);
+        enter(selected);
+    }
+
+    /** 실제로 채팅방 화면을 연다. */
+    private void enter(ChatRoom room) {
+        ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open(room);
         mainFrame.switchTo("chatRoom");
     }
 
-    /** 가입지원 메세지를 받아 CHATROOM_JOIN_REQUEST를 보낸다. 승인은 방장이 채팅방 화면에서 한다. */
+    /**
+     * 가입 절차. 자격 제한(입학년도/학과/기숙사)이 없는 방은 승인 없이 바로 입장하고,
+     * 제한이 있는 방만 가입지원 메세지를 받아 신청한다(승인은 방장이 채팅방 화면에서 한다).
+     */
     private void requestJoin(ChatRoom room) {
+        if (room.isOpenJoin()) {
+            ChatRoom joined = sendJoin(room, ""); // 제한 없는 방 — 메세지 없이 즉시 참여
+            if (joined != null) {
+                enter(joined); // 서버가 참여자로 넣어준 방으로 바로 입장
+            }
+            return;
+        }
         if (room.getPendingJoinRequests().containsKey(myId())) {
             JOptionPane.showMessageDialog(this, "이미 가입 신청을 보냈습니다. 방장의 승인을 기다려 주세요.",
                     "가입 신청", JOptionPane.INFORMATION_MESSAGE);
@@ -196,16 +211,23 @@ public class ChatRoomListPanel extends JPanel {
         if (message == null) { // 취소
             return;
         }
-        Packet request = Packet.request(RequestType.CHATROOM_JOIN_REQUEST,
-                new ChatRoomJoinRequest(room.getRoomId(), message));
-        Packet response = mainFrame.getConnection().sendRequest(request);
-        if (response.getStatus() == ResponseStatus.OK) {
+        if (sendJoin(room, message) != null) {
             JOptionPane.showMessageDialog(this, "가입 신청을 보냈습니다. 방장이 승인하면 들어갈 수 있습니다.",
                     "가입 신청", JOptionPane.INFORMATION_MESSAGE);
             refresh(); // 방금 보낸 신청이 "승인 대기중"으로 보이도록
-        } else {
-            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "가입 신청 실패", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** CHATROOM_JOIN_REQUEST를 보내고 서버가 돌려준 갱신된 방을 반환한다. 실패하면 오류를 띄우고 null. */
+    private ChatRoom sendJoin(ChatRoom room, String message) {
+        Packet request = Packet.request(RequestType.CHATROOM_JOIN_REQUEST,
+                new ChatRoomJoinRequest(room.getRoomId(), message));
+        Packet response = mainFrame.getConnection().sendRequest(request);
+        if (response.getStatus() != ResponseStatus.OK) {
+            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "가입 실패", JOptionPane.ERROR_MESSAGE);
+            return null;
+        }
+        return (ChatRoom) response.getPayload();
     }
 
     private boolean isMember(ChatRoom room) {

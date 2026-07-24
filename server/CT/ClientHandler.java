@@ -459,9 +459,16 @@ public class ClientHandler implements Runnable {
         requireLogin();
         ChatRoomJoinRequest payload = (ChatRoomJoinRequest) request.getPayload();
         ChatRoom room = dataStore.getChatRoom(payload.getRoomId());
-        room.requestJoin(currentUser, payload.getMessage());
+        // 자격 제한(입학년도/학과/기숙사)이 없는 방은 방장 승인 없이 바로 참여시킨다.
+        // 제한이 걸린 방은 기존대로 신청만 등록하고 방장이 승인/거절한다.
+        if (room.isOpenJoin()) {
+            room.join(currentUser);
+        } else {
+            room.requestJoin(currentUser, payload.getMessage());
+        }
         dataStore.saveChatRoom(room);
-        return Packet.success(request, null);
+        // 갱신된 방을 돌려준다 — 클라이언트는 내가 멤버에 들어갔는지 보고 바로 입장/승인 대기를 구분한다.
+        return Packet.success(request, room);
     }
 
     private Packet handleChatRoomJoinApprove(Packet request) {

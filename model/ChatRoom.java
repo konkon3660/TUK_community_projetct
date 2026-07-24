@@ -122,6 +122,24 @@ public class ChatRoom implements Serializable {
         return !dormOnlyLimit || user.isDormitory();
     }
 
+    /**
+     * 자격 제한(입학년도/학과/기숙사)이 하나도 없으면 방장 승인 없이 바로 입장할 수 있는 방이다.
+     * 정원은 자격 심사가 아니라 수용 한계이므로 여기서 보지 않는다 (가득 차면 canJoin/join이 막는다).
+     * 이런 방은 requestJoin(승인 대기) 대신 join(즉시 참여)으로 처리한다.
+     */
+    public boolean isOpenJoin() {
+        return admissionYearLimit == null && departmentLimit.isEmpty() && !dormOnlyLimit;
+    }
+
+    /** 방장 승인 없이 바로 참여시킨다 (자격 제한 없는 방 전용). 정원·중복 참여는 canJoin이 막는다. */
+    public void join(User user) {
+        if (!canJoin(user)) {
+            throw new IllegalStateException("가입 조건을 만족하지 않습니다: " + roomId);
+        }
+        pendingJoinRequests.remove(user.getId()); // 혹시 남아있던 신청은 정리
+        memberIds.add(user.getId());
+    }
+
     /** 가입지원 메세지와 함께 신청을 등록 (방장이 approveJoin/rejectJoin으로 처리) */
     public void requestJoin(User user, String applicationMessage) {
         if (memberIds.contains(user.getId())) {

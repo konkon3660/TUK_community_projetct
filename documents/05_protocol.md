@@ -54,7 +54,7 @@
 | `FILE_UPLOAD` | `FileTransfer` | `String`(서버 저장 경로) | | 첨부 등록. 게시글 저장 **전에** 먼저 보냄(§2.3) |
 | `FILE_DOWNLOAD` | `String`(저장 경로) | `FileTransfer` | | 첨부 열람/저장 |
 | `CHATROOM_CREATE` | `model.ChatRoom`(초기값) | `model.ChatRoom`(채번 결과) | ✔ | **roomId는 서버가 채번** |
-| `CHATROOM_JOIN_REQUEST` | `ChatRoomJoinRequest` | 없음 | ✔ | |
+| `CHATROOM_JOIN_REQUEST` | `ChatRoomJoinRequest` | `model.ChatRoom`(갱신된 방) | ✔ | 자격 제한 없는 방은 **즉시 참여**, 있으면 승인 대기(§4.2) |
 | `CHATROOM_JOIN_APPROVE` | `ChatRoomJoinDecision` | 없음 | ✔ | 방장 전용 |
 | `CHATROOM_JOIN_REJECT` | `ChatRoomJoinDecision` | 없음 | ✔ | 방장 전용 |
 | `CHAT_SEND` | `ChatSendRequest` | 없음 | ✔ | 다른 멤버에게 푸시 발생 |

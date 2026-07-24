@@ -268,6 +268,16 @@ public class PostDetailPanel extends JPanel {
             mainFrame.switchTo("chatRoom");
             return;
         }
+        // 공동구매 방은 자격 제한이 없어 보통 isOpenJoin이다 — 이 경우 승인 없이 바로 참여시킨다.
+        if (linkedRoom.isOpenJoin()) {
+            ChatRoom joined = sendJoin("");
+            if (joined != null) {
+                this.linkedRoom = joined;
+                ((ChatRoomPanel) mainFrame.getScreen("chatRoom")).open(joined);
+                mainFrame.switchTo("chatRoom");
+            }
+            return;
+        }
         if (linkedRoom.getPendingJoinRequests().containsKey(myId)) {
             JOptionPane.showMessageDialog(this, "이미 가입 신청을 보냈습니다. 방장의 승인을 기다려 주세요.",
                     "가입 신청", JOptionPane.INFORMATION_MESSAGE);
@@ -278,17 +288,24 @@ public class PostDetailPanel extends JPanel {
         if (message == null) { // 취소
             return;
         }
-        Packet request = Packet.request(RequestType.CHATROOM_JOIN_REQUEST,
-                new ChatRoomJoinRequest(linkedRoom.getRoomId(), message));
-        Packet response = mainFrame.getConnection().sendRequest(request);
-        if (response.getStatus() == ResponseStatus.OK) {
+        if (sendJoin(message) != null) {
             // 들고 있는 방 사본에도 반영해서 바로 다시 누르면 "이미 신청" 안내가 나오게 한다.
             linkedRoom.getPendingJoinRequests().put(myId, message);
             JOptionPane.showMessageDialog(this, "가입 신청을 보냈습니다. 방장이 승인하면 들어갈 수 있습니다.",
                     "가입 신청", JOptionPane.INFORMATION_MESSAGE);
-        } else {
-            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "가입 신청 실패", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** 연결된 방에 CHATROOM_JOIN_REQUEST를 보내고 갱신된 방을 반환한다. 실패하면 오류를 띄우고 null. */
+    private ChatRoom sendJoin(String message) {
+        Packet request = Packet.request(RequestType.CHATROOM_JOIN_REQUEST,
+                new ChatRoomJoinRequest(linkedRoom.getRoomId(), message));
+        Packet response = mainFrame.getConnection().sendRequest(request);
+        if (response.getStatus() != ResponseStatus.OK) {
+            JOptionPane.showMessageDialog(this, response.getErrorMessage(), "가입 실패", JOptionPane.ERROR_MESSAGE);
+            return null;
+        }
+        return (ChatRoom) response.getPayload();
     }
 
     /** 첨부를 서버에서 받아 사용자가 고른 위치에 저장한다. 원본 파일명이 기본값으로 채워진다. */

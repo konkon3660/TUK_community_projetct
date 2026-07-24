@@ -56,7 +56,12 @@ public enum RequestType {
     /** 요청 payload: {@code model.ChatRoom}(생성할 방의 초기값). 응답 payload: {@code model.ChatRoom}(roomId 채번 결과) */
     CHATROOM_CREATE,
 
-    /** 요청 payload: {@link model.protocol.ChatRoomJoinRequest}. 응답 payload: 없음 */
+    /**
+     * 채팅방 가입. 자격 제한(입학년도/학과/기숙사)이 없는 방이면 승인 없이 바로 참여시키고,
+     * 제한이 있는 방이면 신청만 등록해 방장 승인을 기다린다.
+     * 요청 payload: {@link model.protocol.ChatRoomJoinRequest}.
+     * 응답 payload: {@code model.ChatRoom}(갱신된 방 — 참여자에 내가 들어갔으면 즉시 가입, 아니면 승인 대기).
+     */
     CHATROOM_JOIN_REQUEST,
 
     /** 요청 payload: {@link model.protocol.ChatRoomJoinDecision}, 방장 전용. 응답 payload: 없음 */
